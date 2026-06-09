@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Codex Task Loop Decision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["decision", "reason", "next_prompt", "completed_criteria", "unresolved_criteria", "validation_required", "risks", "new_task_packets"],
+  "properties": {
+    "decision": {"type": "string", "enum": ["accept", "continue", "repair", "narrow", "escalate", "reject", "split"]},
+    "reason": {"type": "string"},
+    "next_prompt": {"type": "string"},
+    "completed_criteria": {"type": "array", "items": {"type": "string"}},
+    "unresolved_criteria": {"type": "array", "items": {"type": "string"}},
+    "validation_required": {"type": "array", "items": {"type": "string"}},
+    "risks": {"type": "array", "items": {"type": "string"}},
+    "new_task_packets": {"type": "array", "items": {"type": "object"}}
+  }
+}

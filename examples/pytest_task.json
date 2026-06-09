@@ -1,0 +1,19 @@
+{
+  "task_id": "pytest-add-focused-tests",
+  "task_type": "test",
+  "objective": "Add focused pytest tests for existing utility functions. Preserve current behavior and do not refactor implementation code unless required for testability.",
+  "allowed_paths": ["tests/", "src/", "pyproject.toml"],
+  "blocked_paths": [],
+  "deliverables": ["focused tests under tests/"],
+  "acceptance_criteria": [
+    "New tests cover existing utility behavior",
+    "pytest passes",
+    "No unrelated files are modified"
+  ],
+  "validation_commands": ["python -m pytest -q"],
+  "regression_commands": [],
+  "artifact_checks": [],
+  "human_review_required": false,
+  "max_iterations": 6,
+  "command_timeout_seconds": 120
+}

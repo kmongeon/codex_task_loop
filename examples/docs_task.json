@@ -1,0 +1,23 @@
+{
+  "task_id": "docs-readme-update",
+  "task_type": "docs",
+  "objective": "Create or update docs/USAGE.md with clear instructions for running the current project. Do not modify source code.",
+  "allowed_paths": ["docs/", "README.md"],
+  "blocked_paths": ["src/", "tests/"],
+  "deliverables": ["docs/USAGE.md"],
+  "acceptance_criteria": [
+    "docs/USAGE.md exists",
+    "docs/USAGE.md explains setup, run command, validation command, and expected output",
+    "No source or test files are modified"
+  ],
+  "validation_commands": [],
+  "regression_commands": [],
+  "artifact_checks": [
+    {"path": "docs/USAGE.md", "kind": "nonempty"},
+    {"path": "docs/USAGE.md", "kind": "contains", "text": "Setup"},
+    {"path": "docs/USAGE.md", "kind": "contains", "text": "Validation"}
+  ],
+  "human_review_required": false,
+  "max_iterations": 4,
+  "command_timeout_seconds": 120
+}

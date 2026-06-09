@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Codex Task Packet",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "task_id",
+    "task_type",
+    "objective",
+    "allowed_paths",
+    "acceptance_criteria",
+    "validation_commands",
+    "max_iterations"
+  ],
+  "properties": {
+    "task_id": {"type": "string", "minLength": 1},
+    "task_type": {
+      "type": "string",
+      "enum": ["feature", "bugfix", "refactor", "test", "docs", "eval", "schema", "pipeline", "cleanup", "analysis"]
+    },
+    "workspace_root": {"type": "string", "minLength": 1},
+    "objective": {"type": "string", "minLength": 1},
+    "allowed_paths": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+    "blocked_paths": {"type": "array", "items": {"type": "string"}, "default": []},
+    "deliverables": {"type": "array", "items": {"type": "string"}, "default": []},
+    "acceptance_criteria": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+    "validation_commands": {"type": "array", "items": {"type": "string"}, "default": []},
+    "regression_commands": {"type": "array", "items": {"type": "string"}, "default": []},
+    "artifact_checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "kind"],
+        "properties": {
+          "path": {"type": "string"},
+          "kind": {"type": "string", "enum": ["exists", "nonempty", "contains"]},
+          "text": {"type": "string"}
+        }
+      },
+      "default": []
+    },
+    "human_review_required": {"type": "boolean", "default": false},
+    "max_iterations": {"type": "integer", "minimum": 1, "maximum": 25},
+    "command_timeout_seconds": {"type": "integer", "minimum": 1, "default": 120}
+  }
+}

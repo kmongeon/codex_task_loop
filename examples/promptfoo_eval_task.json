@@ -1,0 +1,19 @@
+{
+  "task_id": "promptfoo-eval-addition",
+  "task_type": "eval",
+  "objective": "Add or update Promptfoo eval coverage for the current workflow. Keep changes scoped to eval configuration and documentation.",
+  "allowed_paths": ["promptfooconfig.yaml", "promptfoo/", "evals/", "docs/"],
+  "blocked_paths": ["src/"],
+  "deliverables": ["Promptfoo eval configuration or test case"],
+  "acceptance_criteria": [
+    "Promptfoo configuration is present",
+    "Targeted eval can be run",
+    "No unrelated implementation files are modified"
+  ],
+  "validation_commands": ["npx promptfoo eval -c promptfooconfig.yaml"],
+  "regression_commands": [],
+  "artifact_checks": [],
+  "human_review_required": false,
+  "max_iterations": 6,
+  "command_timeout_seconds": 300
+}

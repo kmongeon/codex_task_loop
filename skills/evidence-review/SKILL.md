@@ -8,7 +8,7 @@ Use this skill for the independent review step of a task loop.
 This skill is self-contained. The reviewer runs on its own ephemeral, read-only Codex thread whose only inputs are the task packet, the eval-gate evidence, and the decision schema. It never shares a thread with the execution agent.
 
 - `scripts/evidence_review.py`: review entrypoint.
-- `schemas/decision.schema.json`: decision contract, enforced as the turn output schema.
+- `schemas/decision.schema.json`: decision contract; the review output is validated against it before writing.
 - `templates/review_prompt.md`: review prompt template.
 
 Run:

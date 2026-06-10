@@ -132,10 +132,10 @@ def parse_review_decision(
 # --- isolated review turn ---------------------------------------------------
 
 
-def run_review_turn(prompt: str, model: str, effort: str | None, cwd: str, decision_schema: dict[str, Any]) -> str:
+def run_review_turn(prompt: str, model: str, effort: str | None, cwd: str) -> str:
     from openai_codex import ApprovalMode, Codex, Sandbox
 
-    turn_kwargs: dict[str, Any] = {"sandbox": Sandbox("read-only"), "output_schema": decision_schema}
+    turn_kwargs: dict[str, Any] = {"sandbox": Sandbox("read-only")}
     if effort is not None:
         turn_kwargs["effort"] = effort
 
@@ -180,13 +180,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         },
     )
 
-    review_text = run_review_turn(
-        prompt,
-        args.model,
-        args.effort,
-        str(Path(args.workspace_root).resolve()),
-        decision_schema,
-    )
+    review_text = run_review_turn(prompt, args.model, args.effort, str(Path(args.workspace_root).resolve()))
     output_path = Path(args.output).resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     (output_path.parent / "codex_review_raw.md").write_text(review_text, encoding="utf-8")

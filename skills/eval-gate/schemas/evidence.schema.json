@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Codex Task Loop Evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "task_id",
+    "iteration",
+    "outer_gate_passed",
+    "validation_passed",
+    "artifact_checks_passed",
+    "diff_audit_passed",
+    "commands",
+    "artifact_checks",
+    "diff_audit",
+    "codex_execution_summary_file"
+  ],
+  "properties": {
+    "task_id": {"type": "string", "minLength": 1},
+    "iteration": {"type": "integer", "minimum": 1},
+    "outer_gate_passed": {"type": "boolean"},
+    "validation_passed": {"type": "boolean"},
+    "artifact_checks_passed": {"type": "boolean"},
+    "diff_audit_passed": {"type": "boolean"},
+    "commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["command", "returncode", "passed", "stdout_tail", "stderr_tail"],
+        "properties": {
+          "command": {"type": "string"},
+          "returncode": {"type": "integer"},
+          "passed": {"type": "boolean"},
+          "stdout_tail": {"type": "string"},
+          "stderr_tail": {"type": "string"}
+        }
+      }
+    },
+    "artifact_checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "kind", "passed", "detail"],
+        "properties": {
+          "path": {"type": "string"},
+          "kind": {"type": "string"},
+          "text": {"type": "string"},
+          "passed": {"type": "boolean"},
+          "detail": {"type": "string"}
+        }
+      }
+    },
+    "diff_audit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["changed_files", "allowed_paths", "blocked_paths", "unexpected_files", "blocked_files_changed", "passed"],
+      "properties": {
+        "changed_files": {"type": "array", "items": {"type": "string"}},
+        "allowed_paths": {"type": "array", "items": {"type": "string"}},
+        "blocked_paths": {"type": "array", "items": {"type": "string"}},
+        "unexpected_files": {"type": "array", "items": {"type": "string"}},
+        "blocked_files_changed": {"type": "array", "items": {"type": "string"}},
+        "passed": {"type": "boolean"}
+      }
+    },
+    "codex_execution_summary_file": {"type": "string"}
+  }
+}

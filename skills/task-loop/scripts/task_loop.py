@@ -84,7 +84,7 @@ def git_root(cwd: Path) -> Path:
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a bounded Codex task lifecycle loop.")
     parser.add_argument("--task", required=True, help="Path to task packet JSON.")
-    parser.add_argument("--model", default="gpt-5.4", help="Codex model for execution turns.")
+    parser.add_argument("--model", default="gpt-5.5", help="Codex model for execution turns.")
     parser.add_argument("--max-iterations", type=int, default=None, help="Override task max_iterations.")
     parser.add_argument(
         "--workspace-root",

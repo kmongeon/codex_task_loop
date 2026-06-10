@@ -160,7 +160,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--evidence", required=True, help="Path to eval-gate evidence JSON.")
     parser.add_argument("--output", required=True, help="Path to write decision JSON.")
     parser.add_argument("--workspace-root", required=True, help="Repository state the reviewer may read.")
-    parser.add_argument("--model", default="gpt-5.4", help="Codex model for the review turn.")
+    parser.add_argument("--model", default="gpt-5.5", help="Codex model for the review turn.")
     parser.add_argument("--effort", help="Reasoning effort for the review turn.")
     return parser.parse_args(argv)
 

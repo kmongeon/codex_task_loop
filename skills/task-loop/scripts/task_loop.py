@@ -324,6 +324,18 @@ def run_evidence_review(
     return read_json(iteration_dir / "decision.json")
 
 
+# --- git checkpointing ---------------------------------------------------------
+
+
+def git_checkpoint(repo: Path, workspace: Path, files: list[str], message: str) -> None:
+    """Commit only the audited changed files as a durable per-iteration checkpoint."""
+    if not files:
+        return
+    paths = [str((workspace / file).relative_to(repo)) for file in files]
+    subprocess.run(["git", "add", "--", *paths], cwd=str(repo), check=True)
+    subprocess.run(["git", "commit", "-m", message, "--", *paths], cwd=str(repo), check=True)
+
+
 # --- run bookkeeping ----------------------------------------------------------
 
 
@@ -426,11 +438,17 @@ def run_task_loop(args: argparse.Namespace) -> int:
         print(f"decision={decision['decision']}")
 
         changed = evidence["diff_audit"]["changed_files"]
+        checkpoint_enabled = task.get("git_checkpoint", True)
         accepted = decision["decision"] == "accept" and evidence["outer_gate_passed"]
         if accepted:
+            if checkpoint_enabled:
+                git_checkpoint(repo, workspace, changed, f"task-loop({task['task_id']}): accepted at iteration {iteration}")
             write_final_result(run_dir, workspace, True, iteration, changed, decision=decision)
             print("Accepted")
             return 0
+
+        if checkpoint_enabled:
+            git_checkpoint(repo, workspace, changed, f"task-loop({task['task_id']}): iteration {iteration} {decision['decision']}")
 
         if decision["decision"] in STOP_DECISIONS:
             write_final_result(run_dir, workspace, False, iteration, changed, decision=decision)

@@ -20,12 +20,12 @@
     },
     "workspace_root": {"type": "string", "minLength": 1},
     "objective": {"type": "string", "minLength": 1},
-    "allowed_paths": {"type": "array", "items": {"type": "string"}, "minItems": 1},
-    "blocked_paths": {"type": "array", "items": {"type": "string"}, "default": []},
+    "allowed_paths": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1},
+    "blocked_paths": {"type": "array", "items": {"type": "string", "minLength": 1}, "default": []},
     "deliverables": {"type": "array", "items": {"type": "string"}, "default": []},
     "acceptance_criteria": {"type": "array", "items": {"type": "string"}, "minItems": 1},
-    "validation_commands": {"type": "array", "items": {"type": "string"}, "default": []},
-    "regression_commands": {"type": "array", "items": {"type": "string"}, "default": []},
+    "validation_commands": {"type": "array", "items": {"type": "string", "minLength": 1}, "default": []},
+    "regression_commands": {"type": "array", "items": {"type": "string", "minLength": 1}, "default": []},
     "artifact_checks": {
       "type": "array",
       "items": {
@@ -33,10 +33,17 @@
         "additionalProperties": false,
         "required": ["path", "kind"],
         "properties": {
-          "path": {"type": "string"},
+          "path": {"type": "string", "minLength": 1},
           "kind": {"type": "string", "enum": ["exists", "nonempty", "contains"]},
-          "text": {"type": "string"}
-        }
+          "text": {"type": "string", "minLength": 1}
+        },
+        "allOf": [
+          {
+            "if": {"properties": {"kind": {"const": "contains"}}, "required": ["kind"]},
+            "then": {"required": ["text"]},
+            "else": {"not": {"required": ["text"]}}
+          }
+        ]
       },
       "default": []
     },

@@ -8,6 +8,7 @@ skills/task-loop/
   SKILL.md
   scripts/task_loop.py          # loop entrypoint
   scripts/codex_session.py      # execution-only SDK adapter, fresh thread per turn
+  scripts/validate_task_packet.py # standalone task packet validator
   schemas/task_packet.schema.json
   templates/execution_prompt.md
 

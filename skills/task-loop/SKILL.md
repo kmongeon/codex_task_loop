@@ -9,12 +9,14 @@ This skill is self-contained. It owns the loop entrypoint, the task packet contr
 
 - `scripts/task_loop.py`: loop entrypoint.
 - `scripts/codex_session.py`: execution-only Codex SDK adapter; one fresh thread per iteration.
+- `scripts/validate_task_packet.py`: standalone task packet validator.
 - `schemas/task_packet.schema.json`: task packet contract, including `git_checkpoint` (default true).
 - `templates/execution_prompt.md`: fixed execution contract rendered into every composed prompt.
 
 Run:
 
 ```bash
+python skills/task-loop/scripts/validate_task_packet.py --task <task_packet>.json [--workspace-root <dir>]
 python skills/task-loop/scripts/task_loop.py --task <task_packet>.json [--workspace-root <dir>] [--model <model>] [--review-model <model>]
 ```
 

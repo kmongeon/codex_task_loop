@@ -25,6 +25,12 @@ pip install -r requirements.txt
 
 ## Run
 
+Validate the task packet before launching a loop:
+
+```bash
+python skills/task-loop/scripts/validate_task_packet.py --task examples/docs_task.json
+```
+
 Run from the root of the git repository you want Codex to edit:
 
 ```bash

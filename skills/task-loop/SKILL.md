@@ -20,12 +20,8 @@ Run:
 python skills/task-loop/scripts/validate_task_packet.py --task <task_packet>.json [--workspace-root <dir>]
 python skills/task-loop/scripts/task_loop.py --task <task_packet>.json [--workspace-root <dir>] [--model <model>] [--review-model <model>]
 ```
-
 For an ordered packet series, use `templates/ordered_packet_series_prompt.md`
-as an operator prompt. It does not add a multi-packet runner. It guides Codex
-or a human operator to inspect the repository, validate one packet, run the
-single-packet loop, inspect `final.json` and `evidence.json`, then decide
-whether to continue to the next packet or stop on evidence.
+as an operator prompt.
 
 Loop per iteration:
 
@@ -41,3 +37,4 @@ Rules:
 2. Make only the smallest scoped change per iteration.
 3. The external loop owns validation and acceptance; never self-declare completion.
 4. Exit codes: 0 accepted, 1 max iterations reached, 2 stopped by reviewer decision.
+

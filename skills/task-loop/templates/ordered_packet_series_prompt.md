@@ -1,14 +1,10 @@
-Goal: Use the existing Codex task-loop to supervise an ordered series of task packets, one packet at a time.
+Goal: Run an ordered series of task packets through the existing Codex task-loop, one packet at a time.
 
 Context:
 - Work in the current repository only.
 - Treat the task-loop as a single-packet executor unless repository inspection proves otherwise.
 - Use the repository's existing task-loop entrypoint, task packet schema, validation commands, and run artifact layout.
 - The intended approach is prompt-driven sequencing: inspect the packet series, validate one packet, run it through the existing task-loop, inspect its evidence, then move to the next packet only when the evidence supports continuing.
-
-Mode:
-- Read-only: inspect the task-loop setup and packet series, then report the run plan without modifying files or running state-changing commands.
-- Execution: validate and run packets one at a time using the existing task-loop, then inspect the resulting evidence before continuing.
 
 Constraints:
 - Do not add a multi-packet runner, queue system, packet-series schema, ledger schema, or new controller infrastructure unless the user explicitly asks for implementation.
@@ -29,8 +25,7 @@ Operator steps:
 8. Stop on invalid packet schema, failed validation that cannot be repaired in scope, `reject`, `split`, `escalate`, contradictory constraints, missing required fixtures, unavailable required runtime, or any hard blocker.
 
 Done when:
-- The response states whether the current task-loop supports packet series directly or only through repeated single-packet runs.
-- The response reports the packet order used, the command shape used for packet validation, the command shape used for packet execution, and the evidence inspected after each packet.
-- In read-only mode, the response confirms that no files were modified and provides the packet-by-packet run plan.
-- In execution mode, the response reports each packet run directory, `final.json` path, latest `evidence.json` path, final decision, validation result, and stop/continue decision.
+- The response reports whether the current task-loop supports packet series directly or only through repeated single-packet runs.
+- The response reports the packet order used, the command used for packet validation, the command used for packet execution, and the evidence inspected after each packet.
+- The response reports each packet run directory, `final.json` path, latest `evidence.json` path, final decision, validation result, and stop/continue decision.
 - Any blocker is reported with the packet, evidence path if available, attempted command, blocker, and concrete unlock condition.

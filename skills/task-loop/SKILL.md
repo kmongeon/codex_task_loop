@@ -12,6 +12,7 @@ This skill is self-contained. It owns the loop entrypoint, the task packet contr
 - `scripts/validate_task_packet.py`: standalone task packet validator.
 - `schemas/task_packet.schema.json`: task packet contract, including `git_checkpoint` (default true).
 - `templates/execution_prompt.md`: fixed execution contract rendered into every composed prompt.
+- `templates/ordered_packet_series_prompt.md`: operator prompt for supervising an ordered series of task packets through repeated single-packet runs.
 
 Run:
 
@@ -19,6 +20,12 @@ Run:
 python skills/task-loop/scripts/validate_task_packet.py --task <task_packet>.json [--workspace-root <dir>]
 python skills/task-loop/scripts/task_loop.py --task <task_packet>.json [--workspace-root <dir>] [--model <model>] [--review-model <model>]
 ```
+
+For an ordered packet series, use `templates/ordered_packet_series_prompt.md`
+as an operator prompt. It does not add a multi-packet runner. It guides Codex
+or a human operator to inspect the repository, validate one packet, run the
+single-packet loop, inspect `final.json` and `evidence.json`, then decide
+whether to continue to the next packet or stop on evidence.
 
 Loop per iteration:
 

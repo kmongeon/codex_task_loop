@@ -49,6 +49,23 @@ def write_json(path: Path, obj: Any) -> None:
     path.write_text(json.dumps(obj, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def relative_artifact_path(workspace: Path, path: Path) -> str:
+    return path.relative_to(workspace).as_posix()
+
+
+def append_run_event(run_dir: Path, event: dict[str, Any]) -> None:
+    record = {
+        "timestamp": dt.datetime.now(dt.UTC).isoformat(),
+        **event,
+    }
+    with (run_dir / "run_events.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def print_artifact(label: str, workspace: Path, path: Path) -> None:
+    print(f"{label}: {relative_artifact_path(workspace, path)}")
+
+
 def render_template(template: str, values: dict[str, str]) -> str:
     rendered = template
     for key, value in values.items():
@@ -327,13 +344,34 @@ def run_evidence_review(
 # --- git checkpointing ---------------------------------------------------------
 
 
-def git_checkpoint(repo: Path, workspace: Path, files: list[str], message: str) -> None:
+def skipped_checkpoint(files: list[str], reason: str) -> dict[str, Any]:
+    return {
+        "checkpointed": False,
+        "commit": None,
+        "files": files,
+        "reason": reason,
+    }
+
+
+def git_checkpoint(repo: Path, workspace: Path, files: list[str], message: str) -> dict[str, Any]:
     """Commit only the audited changed files as a durable per-iteration checkpoint."""
     if not files:
-        return
+        return skipped_checkpoint([], "no_changed_files")
     paths = [str((workspace / file).relative_to(repo)) for file in files]
     subprocess.run(["git", "add", "--", *paths], cwd=str(repo), check=True)
     subprocess.run(["git", "commit", "-m", message, "--", *paths], cwd=str(repo), check=True)
+    proc = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=str(repo),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    return {
+        "checkpointed": True,
+        "commit": proc.stdout.strip(),
+        "files": files,
+    }
 
 
 # --- run bookkeeping ----------------------------------------------------------
@@ -362,19 +400,109 @@ def create_run_directory(workspace: Path, task: dict[str, Any]) -> Path:
     return run_dir
 
 
+def markdown_list(values: list[str]) -> str:
+    if not values:
+        return "- none"
+    return "\n".join(f"- `{value}`" for value in values)
+
+
+def write_run_summary(
+    run_dir: Path,
+    workspace: Path,
+    task: dict[str, Any],
+    final: dict[str, Any],
+    iteration_records: list[dict[str, Any]],
+) -> None:
+    lines = [
+        f"# Task Loop Run Summary: {task['task_id']}",
+        "",
+        "## Final Status",
+        "",
+        f"- Complete: `{final['complete']}`",
+        f"- Iterations: `{final['iterations']}`",
+        f"- Run directory: `{final['run_dir']}`",
+        f"- Final result: `{relative_artifact_path(workspace, run_dir / 'final.json')}`",
+        f"- Run events: `{final['run_events_file']}`",
+    ]
+    if "reason" in final:
+        lines.append(f"- Reason: `{final['reason']}`")
+    decision = final.get("decision")
+    if decision is not None:
+        lines.append(f"- Decision: `{decision['decision']}`")
+        lines.append(f"- Decision reason: {decision['reason']}")
+
+    checkpoint_results = final.get("checkpoint_results", [])
+    lines += [
+        "",
+        "## Changed Files",
+        "",
+        markdown_list(final.get("changed_files", [])),
+        "",
+        "## Checkpoints",
+        "",
+    ]
+    if checkpoint_results:
+        for checkpoint in checkpoint_results:
+            commit = checkpoint["commit"] or "none"
+            status = "created" if checkpoint["checkpointed"] else "skipped"
+            reason = checkpoint.get("reason")
+            suffix = f" ({reason})" if reason else ""
+            lines.append(f"- {status}: `{commit}`{suffix}; files: {len(checkpoint['files'])}")
+    else:
+        lines.append("- none")
+
+    lines += [
+        "",
+        "## Iterations",
+        "",
+    ]
+    for record in iteration_records:
+        artifacts = record["artifacts"]
+        evidence = record.get("evidence", {})
+        decision_record = record.get("decision", {})
+        lines += [
+            f"### Iteration {record['iteration']}",
+            "",
+            f"- Prompt: `{artifacts['prompt']}`",
+            f"- Execution: `{artifacts['execution']}`",
+            f"- Evidence: `{artifacts['evidence']}`",
+            f"- Diff: `{artifacts['diff']}`",
+            f"- Decision: `{artifacts['decision']}`",
+            f"- Outer gate passed: `{evidence.get('outer_gate_passed')}`",
+            f"- Validation passed: `{evidence.get('validation_passed')}`",
+            f"- Artifact checks passed: `{evidence.get('artifact_checks_passed')}`",
+            f"- Diff audit passed: `{evidence.get('diff_audit_passed')}`",
+            f"- Reviewer decision: `{decision_record.get('decision')}`",
+            "",
+        ]
+
+    summary_path = run_dir / "RUN_SUMMARY.md"
+    summary_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
+
+def changed_files_from_checkpoints(checkpoint_results: list[dict[str, Any]]) -> list[str]:
+    return sorted({file for checkpoint in checkpoint_results for file in checkpoint["files"]})
+
+
 def write_final_result(
     run_dir: Path,
     workspace: Path,
+    task: dict[str, Any],
     complete: bool,
     iterations: int,
     changed: list[str],
+    iteration_records: list[dict[str, Any]],
+    checkpoint_results: list[dict[str, Any]],
     decision: dict[str, Any] | None = None,
     reason: str | None = None,
-) -> None:
+) -> dict[str, Any]:
     final: dict[str, Any] = {
         "complete": complete,
         "iterations": iterations,
         "run_dir": str(run_dir.relative_to(workspace)),
+        "run_events_file": relative_artifact_path(workspace, run_dir / "run_events.jsonl"),
+        "run_summary_file": relative_artifact_path(workspace, run_dir / "RUN_SUMMARY.md"),
+        "checkpoint_results": checkpoint_results,
     }
     if decision is not None:
         final["decision"] = decision
@@ -383,6 +511,8 @@ def write_final_result(
     if changed:
         final["changed_files"] = changed
     write_json(run_dir / "final.json", final)
+    write_run_summary(run_dir, workspace, task, final, iteration_records)
+    return final
 
 
 # --- loop ---------------------------------------------------------------------
@@ -411,51 +541,263 @@ def run_task_loop(args: argparse.Namespace) -> int:
     print(f"Task: {task['task_id']}")
     print(f"Execution model: {args.model}")
     print(f"Review model: {review_model}")
+    print_artifact("Run events", workspace, run_dir / "run_events.jsonl")
+
+    append_run_event(
+        run_dir,
+        {
+            "event": "run_started",
+            "task_id": task["task_id"],
+            "git_root": str(repo),
+            "workspace_root": str(workspace),
+            "run_dir": relative_artifact_path(workspace, run_dir),
+            "task_file": relative_artifact_path(workspace, task_path),
+            "execution_model": args.model,
+            "review_model": review_model,
+        },
+    )
 
     decision: dict[str, Any] | None = None
     evidence: dict[str, Any] | None = None
+    iteration_records: list[dict[str, Any]] = []
+    checkpoint_results: list[dict[str, Any]] = []
 
     for iteration in range(1, max_iterations + 1):
         iter_dir = run_dir / f"iteration_{iteration:02d}"
         iter_dir.mkdir(parents=True, exist_ok=True)
+        prompt_path = iter_dir / "composed_prompt.md"
+        execution_path = iter_dir / "codex_execution.md"
+        evidence_path = iter_dir / "evidence.json"
+        diff_path = iter_dir / "workspace.diff"
+        decision_path = iter_dir / "decision.json"
+        iteration_record: dict[str, Any] = {
+            "iteration": iteration,
+            "artifacts": {
+                "prompt": relative_artifact_path(workspace, prompt_path),
+                "execution": relative_artifact_path(workspace, execution_path),
+                "evidence": relative_artifact_path(workspace, evidence_path),
+                "diff": relative_artifact_path(workspace, diff_path),
+                "decision": relative_artifact_path(workspace, decision_path),
+            },
+        }
+        iteration_records.append(iteration_record)
 
         print(f"\n--- iteration {iteration} ---")
+        append_run_event(
+            run_dir,
+            {
+                "event": "iteration_started",
+                "iteration": iteration,
+                "iteration_dir": relative_artifact_path(workspace, iter_dir),
+            },
+        )
         prompt = compose_prompt(execution_template, task_json, iteration, max_iterations, decision, evidence)
-        (iter_dir / "composed_prompt.md").write_text(prompt, encoding="utf-8")
+        prompt_path.write_text(prompt, encoding="utf-8")
+        print_artifact("Composed prompt", workspace, prompt_path)
+        append_run_event(
+            run_dir,
+            {
+                "event": "prompt_written",
+                "iteration": iteration,
+                "path": relative_artifact_path(workspace, prompt_path),
+            },
+        )
 
         print("Codex execution turn (fresh thread)")
         work_text = run_execution_turn(codex_launch, thread_options, turn_options, prompt)
-        (iter_dir / "codex_execution.md").write_text(work_text, encoding="utf-8")
+        execution_path.write_text(work_text, encoding="utf-8")
+        print_artifact("Execution transcript", workspace, execution_path)
+        append_run_event(
+            run_dir,
+            {
+                "event": "execution_completed",
+                "iteration": iteration,
+                "path": relative_artifact_path(workspace, execution_path),
+            },
+        )
 
         print("Eval gate")
         evidence = run_eval_gate(task_path, workspace, iteration, iter_dir)
+        iteration_record["evidence"] = {
+            "outer_gate_passed": evidence["outer_gate_passed"],
+            "validation_passed": evidence["validation_passed"],
+            "artifact_checks_passed": evidence["artifact_checks_passed"],
+            "diff_audit_passed": evidence["diff_audit_passed"],
+        }
+        print(f"outer_gate_passed={evidence['outer_gate_passed']}")
         print(f"validation_passed={evidence['validation_passed']}")
         print(f"artifact_checks_passed={evidence['artifact_checks_passed']}")
         print(f"diff_audit_passed={evidence['diff_audit_passed']}")
+        print_artifact("Evidence", workspace, evidence_path)
+        print_artifact("Workspace diff", workspace, diff_path)
+        append_run_event(
+            run_dir,
+            {
+                "event": "eval_gate_completed",
+                "iteration": iteration,
+                "outer_gate_passed": evidence["outer_gate_passed"],
+                "validation_passed": evidence["validation_passed"],
+                "artifact_checks_passed": evidence["artifact_checks_passed"],
+                "diff_audit_passed": evidence["diff_audit_passed"],
+                "evidence_file": relative_artifact_path(workspace, evidence_path),
+                "workspace_diff_file": relative_artifact_path(workspace, diff_path),
+            },
+        )
 
         print("Isolated evidence review")
         decision = run_evidence_review(task_path, workspace, iter_dir, review_model, args.review_effort)
+        iteration_record["decision"] = {
+            "decision": decision["decision"],
+            "reason": decision["reason"],
+        }
         print(f"decision={decision['decision']}")
+        print_artifact("Decision", workspace, decision_path)
+        append_run_event(
+            run_dir,
+            {
+                "event": "review_completed",
+                "iteration": iteration,
+                "decision": decision["decision"],
+                "decision_file": relative_artifact_path(workspace, decision_path),
+            },
+        )
 
         changed = evidence["diff_audit"]["changed_files"]
         checkpoint_enabled = task.get("git_checkpoint", True)
         accepted = decision["decision"] == "accept" and evidence["outer_gate_passed"]
         if accepted:
-            if checkpoint_enabled:
+            checkpoint = (
                 git_checkpoint(repo, workspace, changed, f"task-loop({task['task_id']}): accepted at iteration {iteration}")
-            write_final_result(run_dir, workspace, True, iteration, changed, decision=decision)
+                if checkpoint_enabled
+                else skipped_checkpoint(changed, "git_checkpoint_disabled")
+            )
+            checkpoint_results.append(checkpoint)
+            iteration_record["checkpoint"] = checkpoint
+            append_run_event(
+                run_dir,
+                {
+                    "event": "checkpoint_created" if checkpoint["checkpointed"] else "checkpoint_skipped",
+                    "iteration": iteration,
+                    "checkpoint": checkpoint,
+                },
+            )
+            final = write_final_result(
+                run_dir,
+                workspace,
+                task,
+                True,
+                iteration,
+                changed_files_from_checkpoints(checkpoint_results),
+                iteration_records,
+                checkpoint_results,
+                decision=decision,
+            )
+            append_run_event(
+                run_dir,
+                {
+                    "event": "run_finished",
+                    "complete": True,
+                    "iterations": iteration,
+                    "final_file": relative_artifact_path(workspace, run_dir / "final.json"),
+                    "run_summary_file": final["run_summary_file"],
+                },
+            )
+            print_artifact("Final result", workspace, run_dir / "final.json")
+            print_artifact("Run summary", workspace, run_dir / "RUN_SUMMARY.md")
+            print_artifact("Run events", workspace, run_dir / "run_events.jsonl")
             print("Accepted")
             return 0
 
-        if checkpoint_enabled:
+        checkpoint = (
             git_checkpoint(repo, workspace, changed, f"task-loop({task['task_id']}): iteration {iteration} {decision['decision']}")
+            if checkpoint_enabled
+            else skipped_checkpoint(changed, "git_checkpoint_disabled")
+        )
+        checkpoint_results.append(checkpoint)
+        iteration_record["checkpoint"] = checkpoint
+        append_run_event(
+            run_dir,
+            {
+                "event": "checkpoint_created" if checkpoint["checkpointed"] else "checkpoint_skipped",
+                "iteration": iteration,
+                "checkpoint": checkpoint,
+            },
+        )
 
         if decision["decision"] in STOP_DECISIONS:
-            write_final_result(run_dir, workspace, False, iteration, changed, decision=decision)
+            final = write_final_result(
+                run_dir,
+                workspace,
+                task,
+                False,
+                iteration,
+                changed_files_from_checkpoints(checkpoint_results),
+                iteration_records,
+                checkpoint_results,
+                decision=decision,
+            )
+            append_run_event(
+                run_dir,
+                {
+                    "event": "run_stopped",
+                    "complete": False,
+                    "iterations": iteration,
+                    "decision": decision["decision"],
+                    "final_file": relative_artifact_path(workspace, run_dir / "final.json"),
+                    "run_summary_file": final["run_summary_file"],
+                },
+            )
+            append_run_event(
+                run_dir,
+                {
+                    "event": "run_finished",
+                    "complete": False,
+                    "iterations": iteration,
+                    "final_file": relative_artifact_path(workspace, run_dir / "final.json"),
+                    "run_summary_file": final["run_summary_file"],
+                },
+            )
+            print_artifact("Final result", workspace, run_dir / "final.json")
+            print_artifact("Run summary", workspace, run_dir / "RUN_SUMMARY.md")
+            print_artifact("Run events", workspace, run_dir / "run_events.jsonl")
             print(f"Stopped: {decision['decision']}")
             return 2
 
-    write_final_result(run_dir, workspace, False, max_iterations, [], reason="Reached max_iterations")
+    final = write_final_result(
+        run_dir,
+        workspace,
+        task,
+        False,
+        max_iterations,
+        changed_files_from_checkpoints(checkpoint_results),
+        iteration_records,
+        checkpoint_results,
+        reason="Reached max_iterations",
+    )
+    append_run_event(
+        run_dir,
+        {
+            "event": "run_stopped",
+            "complete": False,
+            "iterations": max_iterations,
+            "reason": "Reached max_iterations",
+            "final_file": relative_artifact_path(workspace, run_dir / "final.json"),
+            "run_summary_file": final["run_summary_file"],
+        },
+    )
+    append_run_event(
+        run_dir,
+        {
+            "event": "run_finished",
+            "complete": False,
+            "iterations": max_iterations,
+            "final_file": relative_artifact_path(workspace, run_dir / "final.json"),
+            "run_summary_file": final["run_summary_file"],
+        },
+    )
+    print_artifact("Final result", workspace, run_dir / "final.json")
+    print_artifact("Run summary", workspace, run_dir / "RUN_SUMMARY.md")
+    print_artifact("Run events", workspace, run_dir / "run_events.jsonl")
     print("Reached max_iterations")
     return 1
 

@@ -1,9 +1,14 @@
 # Manifest
 
-This bundle is organized as three self-contained skills. Each skill owns its
-scripts, schemas, and templates; skills communicate only through JSON files.
+This bundle is organized as four self-contained skills. Each skill owns its
+scripts, schemas, and templates; runtime skills communicate only through JSON
+files.
 
 ```text
+skills/task-specifier/
+  SKILL.md
+  templates/packet_authoring_prompt.md
+
 skills/task-loop/
   SKILL.md
   scripts/task_loop.py          # loop entrypoint

@@ -23,6 +23,11 @@ python skills/task-loop/scripts/task_loop.py --task <task_packet>.json [--worksp
 For an ordered packet series, use `templates/ordered_packet_series_prompt.md`
 as an operator prompt.
 
+A well-specified task is small enough to fit in one explicit packet,
+constrained to known paths, with concrete deliverables, objective acceptance
+criteria, and validation evidence that can justify an accept decision without
+relying on trust, memory, or broad interpretation.
+
 Loop per iteration:
 
 1. Compose the prompt: fixed task contract + iteration counter + unresolved criteria + failure evidence + reviewer direction. The contract never mutates; dynamic state is rebuilt from the latest `evidence.json` and `decision.json`.
@@ -37,4 +42,3 @@ Rules:
 2. Make only the smallest scoped change per iteration.
 3. The external loop owns validation and acceptance; never self-declare completion.
 4. Exit codes: 0 accepted, 1 max iterations reached, 2 stopped by reviewer decision.
-

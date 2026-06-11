@@ -1,9 +1,11 @@
 # Codex Task Loop
 
 A Codex SDK harness for applying the loop approach to all Codex tasks. The
-plugin is organized as three self-contained skills that communicate only
+plugin is organized as four self-contained skills. Runtime skills communicate
 through JSON files (`task.json` -> `evidence.json` -> `decision.json`):
 
+- `skills/task-specifier`: packet authoring. Converts user objectives into one
+  bounded task packet or an ordered packet series before execution.
 - `skills/task-loop`: orchestrator. Per-iteration prompt composition, fresh
   execution thread per iteration, git checkpointing, run bookkeeping.
 - `skills/eval-gate`: deterministic verifier. Validation commands, artifact
@@ -11,9 +13,9 @@ through JSON files (`task.json` -> `evidence.json` -> `decision.json`):
 - `skills/evidence-review`: independent reviewer. Ephemeral read-only Codex
   turn that returns a schema-validated decision.
 
-Each skill owns its scripts, schemas, and templates and is independently
-runnable. The orchestrator invokes the other two skills as subprocess CLIs;
-there are no cross-skill Python imports.
+Each skill owns its scripts, schemas, and templates. Runtime skills are
+independently runnable. The orchestrator invokes `eval-gate` and
+`evidence-review` as subprocess CLIs; there are no cross-skill Python imports.
 
 ## Install
 
@@ -24,6 +26,12 @@ pip install -r requirements.txt
 ```
 
 ## Run
+
+Specify broad work into bounded packets before launching a loop:
+
+```text
+Use skills/task-specifier/templates/packet_authoring_prompt.md
+```
 
 Validate the task packet before launching a loop:
 
@@ -61,6 +69,15 @@ python skills/task-loop/scripts/task_loop.py \
 ## Task packet fields
 
 Defined in `skills/task-loop/schemas/task_packet.schema.json`.
+
+A well-specified task is small enough to fit in one explicit packet,
+constrained to known paths, with concrete deliverables, objective acceptance
+criteria, and validation evidence that can justify an accept decision without
+relying on trust, memory, or broad interpretation.
+
+Use `skills/task-specifier` when a user objective must first be converted into
+one packet or an ordered packet series. Use `skills/task-loop` only after the
+packet has been specified and validated.
 
 | Field | Required | Meaning |
 | --- | --- | --- |

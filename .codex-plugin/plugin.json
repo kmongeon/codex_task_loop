@@ -1,7 +1,7 @@
 {
   "name": "codex-task-loop",
-  "version": "0.1.0+codex.local-20260610-task-loop-plugin",
-  "description": "A Codex SDK task lifecycle loop with execution, deterministic evaluation, and isolated evidence review skills.",
+  "version": "0.1.0+codex.local-20260612-task-loop-plugin",
+  "description": "A Codex SDK task lifecycle loop with task specification, execution, deterministic evaluation, and isolated evidence review skills.",
   "author": {
     "name": "Kevin Mongeon"
   },
@@ -9,6 +9,8 @@
   "keywords": [
     "codex",
     "task-loop",
+    "task-specification",
+    "task-packet",
     "workflow",
     "evaluation",
     "evidence-review",
@@ -17,8 +19,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Codex Task Loop",
-    "shortDescription": "Run bounded Codex task loops with validation and review.",
-    "longDescription": "A local Codex SDK harness organized as task-loop, eval-gate, and evidence-review skills. It executes scoped task packets, runs deterministic validation and artifact checks, audits changed paths, and uses an isolated reviewer to decide whether to accept, continue, repair, narrow, escalate, reject, or split the work.",
+    "shortDescription": "Specify and run bounded Codex task loops with validation and review.",
+    "longDescription": "A local Codex SDK harness organized as task-specifier, task-loop, eval-gate, and evidence-review skills. It specifies scoped task packets, executes one packet per run, writes auditable run artifacts, runs deterministic validation and artifact checks, audits changed paths, and uses an isolated reviewer to decide whether to accept, continue, repair, narrow, escalate, reject, or split the work.",
     "developerName": "Kevin Mongeon",
     "category": "Productivity",
     "capabilities": [
@@ -30,6 +32,7 @@
     "defaultPrompt": [
       "Use Codex Task Loop to run this task packet until acceptance or a clear blocker.",
       "Create a scoped Codex task packet with validation commands and allowed paths.",
+      "Create an ordered task-packet series for this objective without running the packets.",
       "Run eval-gate on a task-loop evidence bundle and explain the decision."
     ]
   }

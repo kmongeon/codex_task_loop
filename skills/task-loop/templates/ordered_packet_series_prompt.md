@@ -11,17 +11,17 @@ Constraints:
 - Do not replace the existing single-packet loop.
 - Do not assume local absolute paths, project-specific packet names, or domain-specific artifact names.
 - Do not silently rewrite stale, invalid, rejected, split, or escalated packets.
-- Do not hide failed validation, reviewer stop decisions, hard blockers, or dirty worktree state.
+- Do not hide failed validation, reviewer stop decisions, hard blockers, Git policy failures, or dirty worktree state.
 - Preserve the separation between task packet contract, single-packet execution, deterministic evidence, reviewer decision, and operator-level sequencing.
 
 Operator steps:
 1. Inspect the repository state and identify the task-loop entrypoint, packet validator, packet schema, and run artifact layout.
 2. Identify the ordered packet list from the user-provided plan, index, or packet directory.
-3. For the next packet, inspect the packet objective, allowed paths, blocked paths, acceptance criteria, validation commands, artifact checks, and `git_checkpoint` setting.
+3. For the next packet, inspect the packet objective, allowed paths, blocked paths, acceptance criteria, validation commands, and artifact checks.
 4. Validate the packet against the task packet schema before running it.
 5. Run the existing single-packet task-loop for that packet.
 6. Inspect the packet run's `final.json`, latest `evidence.json`, and reviewer decision.
-7. Continue to the next packet only when the packet is accepted and the evidence supports the acceptance criteria.
+7. Continue to the next packet only when the packet is accepted, the evidence supports the acceptance criteria, and the runner returned to clean `main`.
 8. Stop on invalid packet schema, failed validation that cannot be repaired in scope, `reject`, `split`, `escalate`, contradictory constraints, missing required fixtures, unavailable required runtime, or any hard blocker.
 
 Done when:

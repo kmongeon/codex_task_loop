@@ -16,6 +16,7 @@ skills/task-loop/
   scripts/validate_task_packet.py # standalone task packet validator
   schemas/task_packet.schema.json
   templates/execution_prompt.md
+  templates/ordered_packet_series_prompt.md
 
 skills/eval-gate/
   SKILL.md
@@ -27,6 +28,9 @@ skills/evidence-review/
   scripts/evidence_review.py    # isolated read-only review CLI
   schemas/decision.schema.json
   templates/review_prompt.md
+
+tests/
+  test_git_lifecycle.py          # temp-repo tests for Git policy helpers
 ```
 
 Supporting files:

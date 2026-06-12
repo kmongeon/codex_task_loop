@@ -17,7 +17,7 @@ Constraints:
 Operator steps:
 1. Inspect the repository for real paths, existing tests, scripts, schemas, fixtures, generated artifacts, and documentation surfaces relevant to the objective.
 2. Determine whether the objective fits one explicit packet. If it does not, split it into an ordered packet series.
-3. For each packet, define `task_id`, `task_type`, `objective`, `allowed_paths`, `blocked_paths`, `deliverables`, `acceptance_criteria`, `validation_commands`, `artifact_checks` when file deliverables must exist or contain specific text, `max_iterations`, and `git_checkpoint`.
+3. For each packet, define `task_id`, `task_type`, `objective`, `allowed_paths`, `blocked_paths`, `deliverables`, `acceptance_criteria`, `validation_commands`, `artifact_checks` when file deliverables must exist or contain specific text, and `max_iterations`.
 4. Validate each packet with:
    `python skills/task-loop/scripts/validate_task_packet.py --task <task_packet>.json [--workspace-root <dir>]`
 5. Stop and report a split/escalation note when required paths, fixtures, runtime, validation commands, or acceptance evidence cannot be identified from the repository.

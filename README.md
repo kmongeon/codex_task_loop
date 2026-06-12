@@ -50,6 +50,9 @@ pip install -r requirements.txt
 
 5. Inspect run artifacts under `.codex_task_loop/runs/`.
 
+Each run writes `run_events.jsonl`, `RUN_SUMMARY.md`, `final.json`, and per-
+iteration prompt, execution, evidence, diff, and decision artifacts.
+
 ## Task Contract
 
 The canonical packet contract is
@@ -67,6 +70,10 @@ Examples:
 
 - The loop executes one task packet per run.
 - `task-specifier` handles task decomposition before execution.
+- Ordered packet series are supervised through repeated single-packet runs with
+  [`skills/task-loop/templates/ordered_packet_series_prompt.md`](skills/task-loop/templates/ordered_packet_series_prompt.md).
+- `task-loop` manages the local Git lifecycle for accepted runs; see
+  [`skills/task-loop/SKILL.md`](skills/task-loop/SKILL.md).
 - `task-loop` invokes `eval-gate` and `evidence-review` through JSON file
   handoff: `task.json` -> `evidence.json` -> `decision.json`.
 - The reviewer decision vocabulary and acceptance rules are defined in

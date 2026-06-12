@@ -9,4 +9,5 @@ Rules:
 - Make the smallest correct change for the stated objective.
 - Use the acceptance criteria as the definition of done.
 - Do not declare final completion; the outer task loop owns completion.
+- Do not stage, commit, branch, checkout, merge, rebase, push, reset, or otherwise manage Git; the outer task loop owns Git.
 - Summarize changed files and expected validation after the work turn.

@@ -31,10 +31,18 @@ EXECUTION_TEMPLATE_PATH = SKILL_ROOT / "templates" / "execution_prompt.md"
 
 RUNS_DIR = ".codex_task_loop/runs"
 STOP_DECISIONS = {"escalate", "reject", "split"}
+MAIN_BRANCH = "main"
+ORIGIN_REMOTE = "origin"
+ORIGIN_MAIN = "origin/main"
+GIT_POLICY = "clean-main-task-branch-fast-forward"
 DEFAULT_REPAIR_PROMPT = (
     "Continue the bounded task. Use the latest evidence log, repair unresolved criteria, "
     "stay within allowed paths, and summarize changed files."
 )
+
+
+class GitPolicyError(RuntimeError):
+    """Raised when the runner cannot satisfy the mandatory Git lifecycle."""
 
 
 # --- file helpers -----------------------------------------------------------
@@ -341,36 +349,180 @@ def run_evidence_review(
     return read_json(iteration_dir / "decision.json")
 
 
-# --- git checkpointing ---------------------------------------------------------
+def run_final_validation(task_path: Path, workspace: Path, iteration: int, run_dir: Path) -> tuple[dict[str, Any], Path]:
+    final_validation_dir = run_dir / "final_validation"
+    evidence = run_eval_gate(task_path, workspace, iteration, final_validation_dir)
+    return evidence, final_validation_dir
 
 
-def skipped_checkpoint(files: list[str], reason: str) -> dict[str, Any]:
+# --- git lifecycle ------------------------------------------------------------
+
+
+def git_command(repo: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
+    proc = subprocess.run(["git", *args], cwd=str(repo), text=True, capture_output=True)
+    if proc.returncode != 0:
+        command = "git " + " ".join(args)
+        detail = proc.stderr.strip() or proc.stdout.strip() or f"exit {proc.returncode}"
+        raise GitPolicyError(f"{command} failed: {detail}")
+    return proc
+
+
+def git_stdout(repo: Path, args: list[str]) -> str:
+    return git_command(repo, args).stdout.strip()
+
+
+def git_head(repo: Path) -> str:
+    return git_stdout(repo, ["rev-parse", "HEAD"])
+
+
+def git_ref(repo: Path, ref: str) -> str:
+    return git_stdout(repo, ["rev-parse", "--verify", ref])
+
+
+def current_branch(repo: Path) -> str:
+    branch = git_stdout(repo, ["branch", "--show-current"])
+    if not branch:
+        raise GitPolicyError("task-loop must run on a named branch, not detached HEAD.")
+    return branch
+
+
+def clean_status(repo: Path) -> str:
+    return git_stdout(repo, ["status", "--porcelain", "--untracked-files=all"])
+
+
+def require_clean_worktree(repo: Path, label: str) -> None:
+    status = clean_status(repo)
+    if status:
+        raise GitPolicyError(f"{label} requires a clean worktree:\n{status}")
+
+
+def ensure_origin(repo: Path) -> None:
+    git_stdout(repo, ["remote", "get-url", ORIGIN_REMOTE])
+
+
+def fetch_origin(repo: Path) -> None:
+    git_command(repo, ["fetch", ORIGIN_REMOTE])
+
+
+def ensure_main_matches_origin(repo: Path) -> tuple[str, str]:
+    main_commit = git_ref(repo, f"refs/heads/{MAIN_BRANCH}")
+    origin_commit = git_ref(repo, f"refs/remotes/{ORIGIN_MAIN}")
+    if main_commit != origin_commit:
+        raise GitPolicyError(
+            f"{MAIN_BRANCH} must match {ORIGIN_MAIN}: "
+            f"{MAIN_BRANCH}={main_commit}, {ORIGIN_MAIN}={origin_commit}"
+        )
+    return main_commit, origin_commit
+
+
+def git_preflight(repo: Path) -> dict[str, str]:
+    branch = current_branch(repo)
+    if branch != MAIN_BRANCH:
+        raise GitPolicyError(f"task-loop must start on {MAIN_BRANCH}; current branch is {branch}.")
+    ensure_origin(repo)
+    fetch_origin(repo)
+    main_commit, origin_commit = ensure_main_matches_origin(repo)
+    require_clean_worktree(repo, f"{MAIN_BRANCH} preflight")
     return {
-        "checkpointed": False,
-        "commit": None,
-        "files": files,
-        "reason": reason,
+        "start_main_commit": main_commit,
+        "origin_main_commit": origin_commit,
     }
 
 
-def git_checkpoint(repo: Path, workspace: Path, files: list[str], message: str) -> dict[str, Any]:
-    """Commit only the audited changed files as a durable per-iteration checkpoint."""
-    if not files:
-        return skipped_checkpoint([], "no_changed_files")
-    paths = [str((workspace / file).relative_to(repo)) for file in files]
-    subprocess.run(["git", "add", "--", *paths], cwd=str(repo), check=True)
-    subprocess.run(["git", "commit", "-m", message, "--", *paths], cwd=str(repo), check=True)
+def task_branch_name(task: dict[str, Any]) -> str:
+    return f"codex/{task['task_id']}"
+
+
+def validate_branch_name(repo: Path, branch: str) -> None:
+    git_stdout(repo, ["check-ref-format", "--branch", branch])
+
+
+def branch_exists(repo: Path, branch: str) -> bool:
     proc = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
+        ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"],
         cwd=str(repo),
         text=True,
         capture_output=True,
-        check=True,
     )
+    return proc.returncode == 0
+
+
+def create_task_branch(repo: Path, branch: str, start_main_commit: str) -> None:
+    validate_branch_name(repo, branch)
+    if branch_exists(repo, branch):
+        raise GitPolicyError(f"task branch already exists: {branch}")
+    git_command(repo, ["switch", "-c", branch, start_main_commit])
+    branch_commit = git_head(repo)
+    if branch_commit != start_main_commit:
+        raise GitPolicyError(
+            f"task branch {branch} must start at {start_main_commit}; got {branch_commit}."
+        )
+
+
+def repo_paths_from_workspace_files(repo: Path, workspace: Path, files: list[str]) -> list[str]:
+    return sorted(str((workspace / file).relative_to(repo)) for file in files)
+
+
+def commit_accepted_changes(
+    repo: Path,
+    workspace: Path,
+    files: list[str],
+    task_id: str,
+    iteration: int,
+) -> str:
+    if not files:
+        raise GitPolicyError("accepted task must change at least one diff-audited file.")
+    paths = repo_paths_from_workspace_files(repo, workspace, files)
+    git_command(repo, ["add", "--", *paths])
+    staged = sorted(git_stdout(repo, ["diff", "--cached", "--name-only"]).splitlines())
+    if staged != paths:
+        raise GitPolicyError(f"staged paths must equal diff-audited paths: staged={staged}, audited={paths}")
+    git_command(repo, ["commit", "-m", f"task-loop({task_id}): accepted at iteration {iteration}", "--", *paths])
+    require_clean_worktree(repo, "accepted task commit")
+    return git_head(repo)
+
+
+def fast_forward_main(repo: Path, task_branch: str) -> str:
+    git_command(repo, ["switch", MAIN_BRANCH])
+    fetch_origin(repo)
+    ensure_main_matches_origin(repo)
+    git_command(repo, ["merge", "--ff-only", task_branch])
+    final_main_commit = git_head(repo)
+    require_clean_worktree(repo, "post fast-forward")
+    return final_main_commit
+
+
+def discard_unaccepted_task_changes(repo: Path) -> None:
+    git_command(repo, ["restore", "--staged", "--worktree", "."])
+    git_command(repo, ["clean", "-fd"])
+
+
+def return_to_clean_main(repo: Path) -> str:
+    discard_unaccepted_task_changes(repo)
+    git_command(repo, ["switch", MAIN_BRANCH])
+    require_clean_worktree(repo, "return to main")
+    return git_head(repo)
+
+
+def verify_final_clean_main(repo: Path) -> str:
+    branch = current_branch(repo)
+    if branch != MAIN_BRANCH:
+        raise GitPolicyError(f"final branch must be {MAIN_BRANCH}; current branch is {branch}.")
+    require_clean_worktree(repo, "final main")
+    return git_head(repo)
+
+
+def initial_git_metadata(preflight: dict[str, str], task_branch: str) -> dict[str, Any]:
     return {
-        "checkpointed": True,
-        "commit": proc.stdout.strip(),
-        "files": files,
+        "git_policy": GIT_POLICY,
+        "start_main_commit": preflight["start_main_commit"],
+        "origin_main_commit": preflight["origin_main_commit"],
+        "task_branch": task_branch,
+        "accepted_commit": None,
+        "fast_forwarded_to_main": False,
+        "final_main_commit": None,
+        "final_validation_passed": False,
+        "final_clean_main": False,
     }
 
 
@@ -431,25 +583,31 @@ def write_run_summary(
         lines.append(f"- Decision: `{decision['decision']}`")
         lines.append(f"- Decision reason: {decision['reason']}")
 
-    checkpoint_results = final.get("checkpoint_results", [])
+    lines += [
+        "",
+        "## Git Lifecycle",
+        "",
+        f"- Policy: `{final['git_policy']}`",
+        f"- Start main commit: `{final['start_main_commit']}`",
+        f"- Origin main commit: `{final['origin_main_commit']}`",
+        f"- Task branch: `{final['task_branch']}`",
+        f"- Accepted commit: `{final.get('accepted_commit') or 'none'}`",
+        f"- Fast-forwarded to main: `{final['fast_forwarded_to_main']}`",
+        f"- Final main commit: `{final.get('final_main_commit') or 'none'}`",
+        f"- Final validation passed: `{final['final_validation_passed']}`",
+        f"- Final clean main: `{final['final_clean_main']}`",
+    ]
+    if "final_validation_file" in final:
+        lines.append(f"- Final validation evidence: `{final['final_validation_file']}`")
+    if "git_failure_reason" in final:
+        lines.append(f"- Git failure reason: `{final['git_failure_reason']}`")
+
     lines += [
         "",
         "## Changed Files",
         "",
         markdown_list(final.get("changed_files", [])),
-        "",
-        "## Checkpoints",
-        "",
     ]
-    if checkpoint_results:
-        for checkpoint in checkpoint_results:
-            commit = checkpoint["commit"] or "none"
-            status = "created" if checkpoint["checkpointed"] else "skipped"
-            reason = checkpoint.get("reason")
-            suffix = f" ({reason})" if reason else ""
-            lines.append(f"- {status}: `{commit}`{suffix}; files: {len(checkpoint['files'])}")
-    else:
-        lines.append("- none")
 
     lines += [
         "",
@@ -480,10 +638,6 @@ def write_run_summary(
     summary_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
 
-def changed_files_from_checkpoints(checkpoint_results: list[dict[str, Any]]) -> list[str]:
-    return sorted({file for checkpoint in checkpoint_results for file in checkpoint["files"]})
-
-
 def write_final_result(
     run_dir: Path,
     workspace: Path,
@@ -492,7 +646,7 @@ def write_final_result(
     iterations: int,
     changed: list[str],
     iteration_records: list[dict[str, Any]],
-    checkpoint_results: list[dict[str, Any]],
+    git_metadata: dict[str, Any],
     decision: dict[str, Any] | None = None,
     reason: str | None = None,
 ) -> dict[str, Any]:
@@ -502,7 +656,7 @@ def write_final_result(
         "run_dir": str(run_dir.relative_to(workspace)),
         "run_events_file": relative_artifact_path(workspace, run_dir / "run_events.jsonl"),
         "run_summary_file": relative_artifact_path(workspace, run_dir / "RUN_SUMMARY.md"),
-        "checkpoint_results": checkpoint_results,
+        **git_metadata,
     }
     if decision is not None:
         final["decision"] = decision
@@ -524,6 +678,13 @@ def run_task_loop(args: argparse.Namespace) -> int:
     validate_json(read_json(TASK_SCHEMA_PATH), task, "task packet")
     workspace = resolve_workspace_root(repo, args.workspace_root or task.get("workspace_root"))
 
+    try:
+        preflight = git_preflight(repo)
+        task_branch = task_branch_name(task)
+        create_task_branch(repo, task_branch, preflight["start_main_commit"])
+    except GitPolicyError as exc:
+        raise SystemExit(f"Git policy failed before task execution: {exc}") from exc
+
     codex_launch = build_codex_launch_options(args)
     thread_options = build_thread_options(args, workspace)
     turn_options = build_turn_options(args, workspace)
@@ -534,11 +695,13 @@ def run_task_loop(args: argparse.Namespace) -> int:
     task_path = run_dir / "task.json"
     execution_template = EXECUTION_TEMPLATE_PATH.read_text(encoding="utf-8")
     task_json = json.dumps(task, indent=2, ensure_ascii=False)
+    git_metadata = initial_git_metadata(preflight, task_branch)
 
     print(f"Git root: {repo}")
     print(f"Workspace root: {workspace}")
     print(f"Run directory: {run_dir.relative_to(workspace)}")
     print(f"Task: {task['task_id']}")
+    print(f"Task branch: {task_branch}")
     print(f"Execution model: {args.model}")
     print(f"Review model: {review_model}")
     print_artifact("Run events", workspace, run_dir / "run_events.jsonl")
@@ -556,11 +719,35 @@ def run_task_loop(args: argparse.Namespace) -> int:
             "review_model": review_model,
         },
     )
+    append_run_event(
+        run_dir,
+        {
+            "event": "git_preflight_started",
+            "recorded_after_preflight": True,
+            "policy": GIT_POLICY,
+        },
+    )
+    append_run_event(
+        run_dir,
+        {
+            "event": "git_preflight_passed",
+            "start_main_commit": preflight["start_main_commit"],
+            "origin_main_commit": preflight["origin_main_commit"],
+        },
+    )
+    append_run_event(
+        run_dir,
+        {
+            "event": "task_branch_created",
+            "task_branch": task_branch,
+            "start_main_commit": preflight["start_main_commit"],
+        },
+    )
 
     decision: dict[str, Any] | None = None
     evidence: dict[str, Any] | None = None
     iteration_records: list[dict[str, Any]] = []
-    checkpoint_results: list[dict[str, Any]] = []
+    latest_changed: list[str] = []
 
     for iteration in range(1, max_iterations + 1):
         iter_dir = run_dir / f"iteration_{iteration:02d}"
@@ -663,33 +850,184 @@ def run_task_loop(args: argparse.Namespace) -> int:
         )
 
         changed = evidence["diff_audit"]["changed_files"]
-        checkpoint_enabled = task.get("git_checkpoint", True)
-        accepted = decision["decision"] == "accept" and evidence["outer_gate_passed"]
+        latest_changed = changed
+        accepted = (
+            decision["decision"] == "accept"
+            and evidence["outer_gate_passed"]
+            and evidence["diff_audit_passed"]
+        )
         if accepted:
-            checkpoint = (
-                git_checkpoint(repo, workspace, changed, f"task-loop({task['task_id']}): accepted at iteration {iteration}")
-                if checkpoint_enabled
-                else skipped_checkpoint(changed, "git_checkpoint_disabled")
-            )
-            checkpoint_results.append(checkpoint)
-            iteration_record["checkpoint"] = checkpoint
-            append_run_event(
-                run_dir,
-                {
-                    "event": "checkpoint_created" if checkpoint["checkpointed"] else "checkpoint_skipped",
-                    "iteration": iteration,
-                    "checkpoint": checkpoint,
-                },
-            )
+            try:
+                accepted_commit = commit_accepted_changes(repo, workspace, changed, task["task_id"], iteration)
+                git_metadata["accepted_commit"] = accepted_commit
+                append_run_event(
+                    run_dir,
+                    {
+                        "event": "accepted_commit_created",
+                        "iteration": iteration,
+                        "accepted_commit": accepted_commit,
+                        "files": changed,
+                    },
+                )
+
+                final_main_commit = fast_forward_main(repo, task_branch)
+                git_metadata["fast_forwarded_to_main"] = True
+                git_metadata["final_main_commit"] = final_main_commit
+                append_run_event(
+                    run_dir,
+                    {
+                        "event": "main_fast_forwarded",
+                        "task_branch": task_branch,
+                        "final_main_commit": final_main_commit,
+                    },
+                )
+
+                final_validation, final_validation_dir = run_final_validation(task_path, workspace, iteration, run_dir)
+                final_validation_file = relative_artifact_path(
+                    workspace,
+                    final_validation_dir / "evidence.json",
+                )
+                git_metadata["final_validation_passed"] = final_validation["outer_gate_passed"]
+                git_metadata["final_validation_file"] = final_validation_file
+                append_run_event(
+                    run_dir,
+                    {
+                        "event": "final_validation_completed",
+                        "outer_gate_passed": final_validation["outer_gate_passed"],
+                        "evidence_file": final_validation_file,
+                    },
+                )
+                if not final_validation["outer_gate_passed"]:
+                    git_metadata["git_failure_reason"] = "final_validation_failed"
+                    try:
+                        git_metadata["final_main_commit"] = verify_final_clean_main(repo)
+                        git_metadata["final_clean_main"] = True
+                        append_run_event(
+                            run_dir,
+                            {
+                                "event": "final_clean_main_verified",
+                                "final_main_commit": git_metadata["final_main_commit"],
+                            },
+                        )
+                    except GitPolicyError as exc:
+                        try:
+                            git_metadata["final_main_commit"] = return_to_clean_main(repo)
+                            git_metadata["final_clean_main"] = True
+                            append_run_event(
+                                run_dir,
+                                {
+                                    "event": "final_clean_main_verified",
+                                    "final_main_commit": git_metadata["final_main_commit"],
+                                },
+                            )
+                        except GitPolicyError as cleanup_exc:
+                            git_metadata["git_failure_reason"] = (
+                                f"final_validation_failed; {exc}; cleanup failed: {cleanup_exc}"
+                            )
+                    final = write_final_result(
+                        run_dir,
+                        workspace,
+                        task,
+                        False,
+                        iteration,
+                        changed,
+                        iteration_records,
+                        git_metadata,
+                        decision=decision,
+                        reason="Final validation failed on main",
+                    )
+                    append_run_event(
+                        run_dir,
+                        {
+                            "event": "git_policy_failed",
+                            "reason": "final_validation_failed",
+                            "final_file": relative_artifact_path(workspace, run_dir / "final.json"),
+                        },
+                    )
+                    append_run_event(
+                        run_dir,
+                        {
+                            "event": "run_finished",
+                            "complete": False,
+                            "iterations": iteration,
+                            "final_file": relative_artifact_path(workspace, run_dir / "final.json"),
+                            "run_summary_file": final["run_summary_file"],
+                        },
+                    )
+                    print_artifact("Final result", workspace, run_dir / "final.json")
+                    print_artifact("Run summary", workspace, run_dir / "RUN_SUMMARY.md")
+                    print_artifact("Run events", workspace, run_dir / "run_events.jsonl")
+                    print(f"Stopped: {final['reason']}")
+                    return 1
+
+                git_metadata["final_main_commit"] = verify_final_clean_main(repo)
+                git_metadata["final_clean_main"] = True
+                append_run_event(
+                    run_dir,
+                    {
+                        "event": "final_clean_main_verified",
+                        "final_main_commit": git_metadata["final_main_commit"],
+                    },
+                )
+            except GitPolicyError as exc:
+                git_metadata["git_failure_reason"] = str(exc)
+                try:
+                    git_metadata["final_main_commit"] = return_to_clean_main(repo)
+                    git_metadata["final_clean_main"] = True
+                    append_run_event(
+                        run_dir,
+                        {
+                            "event": "final_clean_main_verified",
+                            "final_main_commit": git_metadata["final_main_commit"],
+                        },
+                    )
+                except GitPolicyError as cleanup_exc:
+                    git_metadata["git_failure_reason"] = f"{exc}; cleanup failed: {cleanup_exc}"
+                final = write_final_result(
+                    run_dir,
+                    workspace,
+                    task,
+                    False,
+                    iteration,
+                    changed,
+                    iteration_records,
+                    git_metadata,
+                    decision=decision,
+                    reason="Git policy failed after acceptance",
+                )
+                append_run_event(
+                    run_dir,
+                    {
+                        "event": "git_policy_failed",
+                        "reason": str(exc),
+                        "final_file": relative_artifact_path(workspace, run_dir / "final.json"),
+                    },
+                )
+                append_run_event(
+                    run_dir,
+                    {
+                        "event": "run_finished",
+                        "complete": False,
+                        "iterations": iteration,
+                        "final_file": relative_artifact_path(workspace, run_dir / "final.json"),
+                        "run_summary_file": final["run_summary_file"],
+                    },
+                )
+                print_artifact("Final result", workspace, run_dir / "final.json")
+                print_artifact("Run summary", workspace, run_dir / "RUN_SUMMARY.md")
+                print_artifact("Run events", workspace, run_dir / "run_events.jsonl")
+                print(f"Stopped: {final['reason']}")
+                return 2
+
             final = write_final_result(
                 run_dir,
                 workspace,
                 task,
                 True,
                 iteration,
-                changed_files_from_checkpoints(checkpoint_results),
+                changed,
                 iteration_records,
-                checkpoint_results,
+                git_metadata,
                 decision=decision,
             )
             append_run_event(
@@ -708,32 +1046,35 @@ def run_task_loop(args: argparse.Namespace) -> int:
             print("Accepted")
             return 0
 
-        checkpoint = (
-            git_checkpoint(repo, workspace, changed, f"task-loop({task['task_id']}): iteration {iteration} {decision['decision']}")
-            if checkpoint_enabled
-            else skipped_checkpoint(changed, "git_checkpoint_disabled")
-        )
-        checkpoint_results.append(checkpoint)
-        iteration_record["checkpoint"] = checkpoint
-        append_run_event(
-            run_dir,
-            {
-                "event": "checkpoint_created" if checkpoint["checkpointed"] else "checkpoint_skipped",
-                "iteration": iteration,
-                "checkpoint": checkpoint,
-            },
-        )
-
         if decision["decision"] in STOP_DECISIONS:
+            try:
+                git_metadata["final_main_commit"] = return_to_clean_main(repo)
+                git_metadata["final_clean_main"] = True
+                append_run_event(
+                    run_dir,
+                    {
+                        "event": "final_clean_main_verified",
+                        "final_main_commit": git_metadata["final_main_commit"],
+                    },
+                )
+            except GitPolicyError as exc:
+                git_metadata["git_failure_reason"] = str(exc)
+                append_run_event(
+                    run_dir,
+                    {
+                        "event": "git_policy_failed",
+                        "reason": str(exc),
+                    },
+                )
             final = write_final_result(
                 run_dir,
                 workspace,
                 task,
                 False,
                 iteration,
-                changed_files_from_checkpoints(checkpoint_results),
+                changed,
                 iteration_records,
-                checkpoint_results,
+                git_metadata,
                 decision=decision,
             )
             append_run_event(
@@ -763,15 +1104,34 @@ def run_task_loop(args: argparse.Namespace) -> int:
             print(f"Stopped: {decision['decision']}")
             return 2
 
+    try:
+        git_metadata["final_main_commit"] = return_to_clean_main(repo)
+        git_metadata["final_clean_main"] = True
+        append_run_event(
+            run_dir,
+            {
+                "event": "final_clean_main_verified",
+                "final_main_commit": git_metadata["final_main_commit"],
+            },
+        )
+    except GitPolicyError as exc:
+        git_metadata["git_failure_reason"] = str(exc)
+        append_run_event(
+            run_dir,
+            {
+                "event": "git_policy_failed",
+                "reason": str(exc),
+            },
+        )
     final = write_final_result(
         run_dir,
         workspace,
         task,
         False,
         max_iterations,
-        changed_files_from_checkpoints(checkpoint_results),
+        latest_changed,
         iteration_records,
-        checkpoint_results,
+        git_metadata,
         reason="Reached max_iterations",
     )
     append_run_event(

@@ -11,44 +11,50 @@ skills/task-specifier/
 
 skills/task-loop/
   SKILL.md
-  scripts/task_loop.py          # loop entrypoint
-  scripts/codex_session.py      # execution-only SDK adapter, fresh thread per turn
-  scripts/validate_task_packet.py # standalone task packet validator
+  scripts/task_loop.py            # manifest-only series runner
+  scripts/codex_session.py        # execution-only SDK adapter, fresh thread per turn
+  scripts/validate_task_packet.py # diagnostic task packet validator
   schemas/task_packet.schema.json
+  schemas/task_series_manifest.schema.json
+  schemas/task_series_state.schema.json
   templates/execution_prompt.md
-  templates/ordered_packet_series_prompt.md
 
 skills/eval-gate/
   SKILL.md
-  scripts/eval_gate.py          # deterministic gate CLI, no LLM
+  scripts/eval_gate.py            # deterministic gate CLI, no LLM
   schemas/evidence.schema.json
 
 skills/evidence-review/
   SKILL.md
-  scripts/evidence_review.py    # isolated read-only review CLI
+  scripts/evidence_review.py      # isolated read-only review CLI
   schemas/decision.schema.json
   templates/review_prompt.md
 
 tests/
-  test_git_lifecycle.py          # temp-repo tests for Git policy helpers
+  test_git_lifecycle.py           # temp-repo tests for manifest and Git policy helpers
+```
+
+Tracked series state:
+
+```text
+codex_task_loop_series/<series_id>/
+  state.json                      # generated durable series progress state
 ```
 
 Runtime output:
 
 ```text
 .codex_task_loop/runs/<run_id>/
-  task.json                       # task packet copy used for this run
+  task.json                       # task packet copy used for this packet run
   run_events.jsonl                # append-only lifecycle events
   RUN_SUMMARY.md                  # operator summary and artifact index
-  final.json                      # final status; points to run_dir, run_events_file, run_summary_file
+  final.json                      # packet final status
   iteration_XX/
     composed_prompt.md
     codex_execution.md
     evidence.json
     workspace.diff
     decision.json
-  final_validation/
-    evidence.json                 # only after accepted changes are fast-forwarded to main
 ```
 
 Supporting files:
@@ -56,9 +62,10 @@ Supporting files:
 - `requirements.txt`
 - `README.md`
 - `AGENTS.md`
+- `examples/docs_manifest.json`
 - `examples/docs_task.json`
 - `examples/pytest_task.json`
 - `examples/promptfoo_eval_task.json`
 
 There are no root-level `scripts/`, `schemas/`, or `templates/` directories;
-those surfaces moved into the skills that own them.
+those surfaces live inside the skills that own them.

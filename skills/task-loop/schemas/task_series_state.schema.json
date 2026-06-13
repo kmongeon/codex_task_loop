@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Codex Task Series State",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "series_id",
+    "series_branch",
+    "workspace_root",
+    "git_policy",
+    "started_at",
+    "updated_at",
+    "start_main_commit",
+    "origin_main_commit",
+    "last_state_commit",
+    "packets"
+  ],
+  "properties": {
+    "series_id": {"type": "string", "minLength": 1},
+    "series_branch": {"type": "string", "minLength": 1},
+    "workspace_root": {"type": "string", "minLength": 1},
+    "git_policy": {"type": "string", "const": "clean-main-series-branch-push"},
+    "started_at": {"type": "string", "minLength": 1},
+    "updated_at": {"type": "string", "minLength": 1},
+    "start_main_commit": {"type": "string", "minLength": 1},
+    "origin_main_commit": {"type": "string", "minLength": 1},
+    "last_state_commit": {"type": ["string", "null"]},
+    "packets": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "packet_id",
+          "task",
+          "depends_on",
+          "state",
+          "outcome",
+          "dependency_status",
+          "run_dir",
+          "artifacts",
+          "accepted_commit",
+          "state_commit"
+        ],
+        "properties": {
+          "packet_id": {"type": "string", "minLength": 1},
+          "task": {"type": "string", "minLength": 1},
+          "depends_on": {"type": "array", "items": {"type": "string"}},
+          "state": {"type": "string", "enum": ["pending", "completed", "skipped", "stopped"]},
+          "outcome": {
+            "type": ["string", "null"],
+            "enum": [
+              "accepted",
+              "rejected",
+              "split_required",
+              "escalated",
+              "max_iterations",
+              "dependency_not_completed",
+              null
+            ]
+          },
+          "dependency_status": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["accepted", "pending", "blocked"],
+            "properties": {
+              "accepted": {"type": "array", "items": {"type": "string"}},
+              "pending": {"type": "array", "items": {"type": "string"}},
+              "blocked": {"type": "array", "items": {"type": "string"}}
+            }
+          },
+          "run_dir": {"type": ["string", "null"]},
+          "artifacts": {
+            "type": "object",
+            "additionalProperties": {"type": ["string", "null"]}
+          },
+          "accepted_commit": {"type": ["string", "null"]},
+          "state_commit": {"type": ["string", "null"]}
+        }
+      }
+    }
+  }
+}

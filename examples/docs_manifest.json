@@ -1,0 +1,12 @@
+{
+  "series_id": "docs-readme-update",
+  "series_branch": "codex/docs-readme-update",
+  "workspace_root": "..",
+  "packets": [
+    {
+      "packet_id": "docs-readme-update",
+      "task": "examples/docs_task.json",
+      "depends_on": null
+    }
+  ]
+}

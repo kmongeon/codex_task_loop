@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import contextmanager, redirect_stderr
+from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "skills" / "task-loop" / "scripts"
@@ -26,6 +30,21 @@ def run_git(repo: Path, args: list[str]) -> str:
     return proc.stdout.strip()
 
 
+@contextmanager
+def chdir(path: Path):
+    previous = Path.cwd()
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(previous)
+
+
+def write_json(path: Path, obj: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(obj, indent=2), encoding="utf-8")
+
+
 def init_repo(tmp: Path) -> tuple[Path, Path]:
     origin = tmp / "origin.git"
     repo = tmp / "repo"
@@ -35,15 +54,212 @@ def init_repo(tmp: Path) -> tuple[Path, Path]:
     run_git(repo, ["config", "user.name", "Task Loop Test"])
     run_git(repo, ["config", "user.email", "task-loop@example.invalid"])
     (repo / "file.txt").write_text("initial\n", encoding="utf-8")
-    run_git(repo, ["add", "file.txt"])
+    (repo / ".gitignore").write_text(".codex_task_loop/\n", encoding="utf-8")
+    run_git(repo, ["add", ".gitignore", "file.txt"])
     run_git(repo, ["commit", "-m", "initial"])
     run_git(repo, ["remote", "add", "origin", str(origin)])
     run_git(repo, ["push", "-u", "origin", "main"])
     return repo, origin
 
 
-def origin_head(origin: Path) -> str:
-    return run_git(origin, ["rev-parse", "main"])
+def origin_head(origin: Path, ref: str = "main") -> str:
+    return run_git(origin, ["rev-parse", ref])
+
+
+def valid_task() -> dict[str, object]:
+    return {
+        "task_id": "change-file",
+        "task_type": "test",
+        "objective": "Change file.txt.",
+        "allowed_paths": ["file.txt"],
+        "acceptance_criteria": ["file.txt changed"],
+        "validation_commands": [],
+        "max_iterations": 1,
+    }
+
+
+def valid_manifest(packets: list[dict[str, object]] | None = None) -> dict[str, object]:
+    return {
+        "series_id": "series",
+        "series_branch": "codex/series",
+        "workspace_root": ".",
+        "packets": packets
+        or [
+            {
+                "packet_id": "first",
+                "task": "tasks/first.json",
+                "depends_on": None,
+            }
+        ],
+    }
+
+
+def write_valid_project(repo: Path, manifest: dict[str, object] | None = None) -> Path:
+    write_json(repo / "tasks" / "first.json", valid_task())
+    manifest_obj = manifest or valid_manifest()
+    write_json(repo / "manifest.json", manifest_obj)
+    return repo / "manifest.json"
+
+
+def commit_and_push_main(repo: Path) -> str:
+    run_git(repo, ["add", "manifest.json", "tasks"])
+    run_git(repo, ["commit", "-m", "add manifest"])
+    run_git(repo, ["push", "origin", "main"])
+    return run_git(repo, ["rev-parse", "main"])
+
+
+def accept_decision() -> dict[str, object]:
+    return {
+        "decision": "accept",
+        "reason": "evidence passed",
+        "next_prompt": "",
+        "completed_criteria": ["file.txt changed"],
+        "unresolved_criteria": [],
+        "validation_required": [],
+        "risks": [],
+        "new_task_packets": [],
+    }
+
+
+def reject_decision() -> dict[str, object]:
+    return {
+        "decision": "reject",
+        "reason": "unsupported",
+        "next_prompt": "",
+        "completed_criteria": [],
+        "unresolved_criteria": ["file.txt changed"],
+        "validation_required": [],
+        "risks": [],
+        "new_task_packets": [],
+    }
+
+
+class ManifestValidationTests(unittest.TestCase):
+    def test_valid_single_packet_manifest_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, _origin = init_repo(Path(tmpdir))
+            manifest_path = write_valid_project(repo)
+
+            plan = task_loop.load_manifest_plan(repo, manifest_path)
+
+        self.assertEqual(plan.manifest["series_id"], "series")
+        self.assertEqual([packet.packet_id for packet in plan.packets], ["first"])
+
+    def test_valid_multi_packet_dependency_chain_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, _origin = init_repo(Path(tmpdir))
+            write_json(repo / "tasks" / "first.json", valid_task())
+            write_json(repo / "tasks" / "second.json", {**valid_task(), "task_id": "second"})
+            manifest_path = repo / "manifest.json"
+            write_json(
+                manifest_path,
+                valid_manifest(
+                    [
+                        {"packet_id": "first", "task": "tasks/first.json", "depends_on": None},
+                        {"packet_id": "second", "task": "tasks/second.json", "depends_on": ["first"]},
+                    ]
+                ),
+            )
+
+            plan = task_loop.load_manifest_plan(repo, manifest_path)
+
+        self.assertEqual([packet.packet_id for packet in plan.packets], ["first", "second"])
+
+    def test_duplicate_packet_id_fails_before_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, _origin = init_repo(Path(tmpdir))
+            write_json(repo / "tasks" / "first.json", valid_task())
+            manifest_path = repo / "manifest.json"
+            write_json(
+                manifest_path,
+                valid_manifest(
+                    [
+                        {"packet_id": "first", "task": "tasks/first.json", "depends_on": None},
+                        {"packet_id": "first", "task": "tasks/first.json", "depends_on": None},
+                    ]
+                ),
+            )
+
+            with self.assertRaisesRegex(SystemExit, "duplicates"):
+                task_loop.load_manifest_plan(repo, manifest_path)
+
+    def test_missing_dependency_reference_fails_before_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, _origin = init_repo(Path(tmpdir))
+            manifest_path = write_valid_project(
+                repo,
+                valid_manifest(
+                    [{"packet_id": "first", "task": "tasks/first.json", "depends_on": ["missing"]}]
+                ),
+            )
+
+            with self.assertRaisesRegex(SystemExit, "unknown packet_id"):
+                task_loop.load_manifest_plan(repo, manifest_path)
+
+    def test_dependency_cycle_fails_before_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, _origin = init_repo(Path(tmpdir))
+            write_json(repo / "tasks" / "first.json", valid_task())
+            write_json(repo / "tasks" / "second.json", {**valid_task(), "task_id": "second"})
+            manifest_path = repo / "manifest.json"
+            write_json(
+                manifest_path,
+                valid_manifest(
+                    [
+                        {"packet_id": "first", "task": "tasks/first.json", "depends_on": ["second"]},
+                        {"packet_id": "second", "task": "tasks/second.json", "depends_on": ["first"]},
+                    ]
+                ),
+            )
+
+            with self.assertRaisesRegex(SystemExit, "dependency cycle"):
+                task_loop.load_manifest_plan(repo, manifest_path)
+
+    def test_missing_task_file_fails_before_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, _origin = init_repo(Path(tmpdir))
+            manifest_path = repo / "manifest.json"
+            write_json(repo / "manifest.json", valid_manifest())
+
+            with self.assertRaisesRegex(SystemExit, "Task file does not exist"):
+                task_loop.load_manifest_plan(repo, manifest_path)
+
+    def test_invalid_task_packet_fails_before_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, _origin = init_repo(Path(tmpdir))
+            write_json(repo / "tasks" / "first.json", {"task_id": "first"})
+            write_json(repo / "manifest.json", valid_manifest())
+
+            with self.assertRaisesRegex(SystemExit, "schema"):
+                task_loop.load_manifest_plan(repo, repo / "manifest.json")
+
+    def test_missing_depends_on_fails_without_coercion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, _origin = init_repo(Path(tmpdir))
+            write_json(repo / "tasks" / "first.json", valid_task())
+            write_json(
+                repo / "manifest.json",
+                {
+                    "series_id": "series",
+                    "series_branch": "codex/series",
+                    "workspace_root": ".",
+                    "packets": [{"packet_id": "first", "task": "tasks/first.json"}],
+                },
+            )
+
+            with self.assertRaisesRegex(SystemExit, "depends_on"):
+                task_loop.load_manifest_plan(repo, repo / "manifest.json")
+
+    def test_preloop_validation_failure_writes_no_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, _origin = init_repo(Path(tmpdir))
+            write_json(repo / "manifest.json", {"series_id": "bad"})
+
+            with chdir(repo), self.assertRaises(SystemExit):
+                task_loop.run_manifest_loop(task_loop.parse_args(["--manifest", "manifest.json"]))
+
+            self.assertFalse((repo / "codex_task_loop_series").exists())
+            self.assertEqual(task_loop.current_branch(repo), "main")
 
 
 class GitLifecycleTests(unittest.TestCase):
@@ -80,25 +296,24 @@ class GitLifecycleTests(unittest.TestCase):
             with self.assertRaises(task_loop.GitPolicyError):
                 task_loop.git_preflight(repo)
 
-    def test_task_branch_starts_from_verified_main(self) -> None:
+    def test_series_branch_starts_from_verified_main(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             repo, _origin = init_repo(Path(tmpdir))
             preflight = task_loop.git_preflight(repo)
-            branch = task_loop.task_branch_name({"task_id": "demo"})
-            task_loop.create_task_branch(repo, branch, preflight["start_main_commit"])
 
-            self.assertEqual(task_loop.current_branch(repo), branch)
+            task_loop.prepare_series_branch(repo, "codex/series", preflight["start_main_commit"])
+
+            self.assertEqual(task_loop.current_branch(repo), "codex/series")
             self.assertEqual(task_loop.git_head(repo), preflight["start_main_commit"])
 
     def test_accepted_commit_includes_only_diff_audited_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             repo, _origin = init_repo(Path(tmpdir))
             preflight = task_loop.git_preflight(repo)
-            branch = task_loop.task_branch_name({"task_id": "accepted"})
-            task_loop.create_task_branch(repo, branch, preflight["start_main_commit"])
+            task_loop.prepare_series_branch(repo, "codex/series", preflight["start_main_commit"])
             (repo / "file.txt").write_text("accepted\n", encoding="utf-8")
 
-            commit = task_loop.commit_accepted_changes(repo, repo, ["file.txt"], "accepted", 1)
+            commit = task_loop.commit_accepted_changes(repo, repo, ["file.txt"], "first", 1)
             committed_files = run_git(repo, ["show", "--name-only", "--format=", commit]).splitlines()
 
             self.assertEqual(committed_files, ["file.txt"])
@@ -108,8 +323,7 @@ class GitLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             repo, _origin = init_repo(Path(tmpdir))
             preflight = task_loop.git_preflight(repo)
-            branch = task_loop.task_branch_name({"task_id": "rejected"})
-            task_loop.create_task_branch(repo, branch, preflight["start_main_commit"])
+            task_loop.prepare_series_branch(repo, "codex/series", preflight["start_main_commit"])
             before = task_loop.git_head(repo)
             (repo / "file.txt").write_text("rejected\n", encoding="utf-8")
 
@@ -118,64 +332,129 @@ class GitLifecycleTests(unittest.TestCase):
             self.assertEqual(task_loop.git_head(repo), before)
             self.assertEqual(task_loop.clean_status(repo), "")
 
-    def test_fast_forward_main_succeeds_without_pushing(self) -> None:
+    def test_manifest_run_accepts_single_packet_on_series_branch_without_advancing_main(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             repo, origin = init_repo(Path(tmpdir))
-            preflight = task_loop.git_preflight(repo)
-            branch = task_loop.task_branch_name({"task_id": "fast-forward"})
-            task_loop.create_task_branch(repo, branch, preflight["start_main_commit"])
-            (repo / "file.txt").write_text("accepted\n", encoding="utf-8")
-            accepted_commit = task_loop.commit_accepted_changes(repo, repo, ["file.txt"], "fast-forward", 1)
-            origin_before = origin_head(origin)
+            manifest_path = write_valid_project(repo)
+            main_before = commit_and_push_main(repo)
 
-            final_main = task_loop.fast_forward_main(repo, branch)
+            def fake_execution(*_args: object) -> str:
+                (repo / "file.txt").write_text("accepted\n", encoding="utf-8")
+                return "changed file.txt"
 
-            self.assertEqual(task_loop.current_branch(repo), "main")
-            self.assertEqual(final_main, accepted_commit)
-            self.assertEqual(task_loop.verify_final_clean_main(repo), accepted_commit)
-            self.assertEqual(origin_head(origin), origin_before)
+            with chdir(repo), patch("task_loop.run_execution_turn", fake_execution), patch(
+                "task_loop.run_evidence_review",
+                return_value=accept_decision(),
+            ):
+                code = task_loop.run_manifest_loop(
+                    task_loop.parse_args(["--manifest", str(manifest_path), "--model", "test"])
+                )
 
-    def test_fast_forward_failure_preserves_task_branch_and_clean_main(self) -> None:
+            state = json.loads((repo / "codex_task_loop_series" / "series" / "state.json").read_text())
+            packet = state["packets"][0]
+            self.assertEqual(code, 0)
+            self.assertEqual(run_git(repo, ["rev-parse", "main"]), main_before)
+            self.assertEqual(origin_head(origin, "main"), main_before)
+            self.assertEqual(task_loop.current_branch(repo), "codex/series")
+            self.assertEqual(origin_head(origin, "codex/series"), task_loop.git_head(repo))
+            self.assertEqual(packet["state"], "completed")
+            self.assertEqual(packet["outcome"], "accepted")
+            self.assertTrue(packet["accepted_commit"])
+            self.assertTrue(packet["state_commit"])
+            self.assertTrue(packet["run_dir"])
+            self.assertTrue(packet["artifacts"]["final"])
+
+    def test_rejected_packet_cleans_work_and_skips_dependent_packet(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             repo, _origin = init_repo(Path(tmpdir))
-            preflight = task_loop.git_preflight(repo)
-            branch = task_loop.task_branch_name({"task_id": "drift"})
-            task_loop.create_task_branch(repo, branch, preflight["start_main_commit"])
-            (repo / "file.txt").write_text("accepted\n", encoding="utf-8")
-            accepted_commit = task_loop.commit_accepted_changes(repo, repo, ["file.txt"], "drift", 1)
-            run_git(repo, ["switch", "main"])
-            (repo / "main.txt").write_text("local drift\n", encoding="utf-8")
-            run_git(repo, ["add", "main.txt"])
-            run_git(repo, ["commit", "-m", "local main drift"])
+            write_json(repo / "tasks" / "first.json", valid_task())
+            write_json(repo / "tasks" / "second.json", {**valid_task(), "task_id": "second"})
+            manifest_path = repo / "manifest.json"
+            write_json(
+                manifest_path,
+                valid_manifest(
+                    [
+                        {"packet_id": "first", "task": "tasks/first.json", "depends_on": None},
+                        {"packet_id": "second", "task": "tasks/second.json", "depends_on": ["first"]},
+                    ]
+                ),
+            )
+            commit_and_push_main(repo)
 
-            with self.assertRaises(task_loop.GitPolicyError):
-                task_loop.fast_forward_main(repo, branch)
+            def fake_execution(*_args: object) -> str:
+                (repo / "file.txt").write_text("rejected\n", encoding="utf-8")
+                return "changed file.txt"
 
-            self.assertEqual(task_loop.current_branch(repo), "main")
-            self.assertEqual(task_loop.clean_status(repo), "")
-            self.assertEqual(run_git(repo, ["rev-parse", branch]), accepted_commit)
+            with chdir(repo), patch("task_loop.run_execution_turn", fake_execution), patch(
+                "task_loop.run_evidence_review",
+                return_value=reject_decision(),
+            ):
+                code = task_loop.run_manifest_loop(
+                    task_loop.parse_args(["--manifest", str(manifest_path), "--model", "test"])
+                )
 
-    def test_final_validation_failure_is_reported(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            repo, _origin = init_repo(Path(tmpdir))
-            run_dir = repo / ".codex_task_loop" / "runs" / "test"
-            run_dir.mkdir(parents=True)
-            task = {
-                "task_id": "validation-fails",
-                "task_type": "test",
-                "objective": "Prove final validation failure is reported.",
-                "allowed_paths": ["file.txt"],
-                "acceptance_criteria": ["validation fails"],
-                "validation_commands": ["false"],
-                "max_iterations": 1,
-            }
-            task_path = run_dir / "task.json"
-            task_path.write_text(json.dumps(task), encoding="utf-8")
+            state = json.loads((repo / "codex_task_loop_series" / "series" / "state.json").read_text())
+            packets = {packet["packet_id"]: packet for packet in state["packets"]}
+            self.assertEqual(code, 2)
+            self.assertEqual((repo / "file.txt").read_text(encoding="utf-8"), "initial\n")
+            self.assertEqual(packets["first"]["state"], "completed")
+            self.assertEqual(packets["first"]["outcome"], "rejected")
+            self.assertEqual(packets["second"]["state"], "skipped")
+            self.assertEqual(packets["second"]["outcome"], "dependency_not_completed")
 
-            evidence, final_dir = task_loop.run_final_validation(task_path, repo, 1, run_dir)
 
-            self.assertFalse(evidence["outer_gate_passed"])
-            self.assertTrue((final_dir / "evidence.json").exists())
+class SchedulerTests(unittest.TestCase):
+    def test_runnable_packet_requires_completed_accepted_dependencies(self) -> None:
+        state = {
+            "packets": [
+                {"packet_id": "first", "depends_on": [], "state": "pending", "outcome": None},
+                {"packet_id": "second", "depends_on": ["first"], "state": "pending", "outcome": None},
+            ]
+        }
+
+        self.assertEqual(task_loop.runnable_packet_ids(state), ["first"])
+        state["packets"][0]["state"] = "completed"
+        state["packets"][0]["outcome"] = "accepted"
+
+        self.assertEqual(task_loop.runnable_packet_ids(state), ["second"])
+
+    def test_dependency_skip_cascades(self) -> None:
+        state = {
+            "packets": [
+                {"packet_id": "first", "depends_on": [], "state": "completed", "outcome": "rejected"},
+                {"packet_id": "second", "depends_on": ["first"], "state": "pending", "outcome": None},
+                {"packet_id": "third", "depends_on": ["second"], "state": "pending", "outcome": None},
+            ]
+        }
+
+        changed = task_loop.mark_dependency_skips(state)
+
+        self.assertEqual(changed, ["second", "third"])
+        self.assertTrue(task_loop.series_is_terminal(state))
+        self.assertEqual(state["packets"][1]["outcome"], "dependency_not_completed")
+        self.assertEqual(state["packets"][2]["outcome"], "dependency_not_completed")
+
+
+class CliAndDocsTests(unittest.TestCase):
+    def test_task_loop_cli_requires_manifest_not_task(self) -> None:
+        args = task_loop.parse_args(["--manifest", "manifest.json"])
+        self.assertEqual(args.manifest, "manifest.json")
+        with redirect_stderr(StringIO()), self.assertRaises(SystemExit):
+            task_loop.parse_args(["--task", "task.json"])
+
+    def test_docs_do_not_reference_removed_ordered_series_prompt(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        removed_prompt = "ordered" + "_packet" + "_series" + "_prompt.md"
+        self.assertFalse((root / "skills" / "task-loop" / "templates" / removed_prompt).exists())
+        checked = [
+            root / "README.md",
+            root / "MANIFEST.md",
+            root / "skills" / "task-loop" / "SKILL.md",
+            root / "skills" / "task-specifier" / "SKILL.md",
+            root / "skills" / "task-specifier" / "templates" / "packet_authoring_prompt.md",
+        ]
+        for path in checked:
+            self.assertNotIn(removed_prompt.removesuffix(".md"), path.read_text(encoding="utf-8"))
 
     def test_schema_rejects_stale_git_checkpoint_field(self) -> None:
         task = {

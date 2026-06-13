@@ -1,77 +1,85 @@
 ---
 name: task-loop
-description: Orchestrate bounded Codex tasks with per-iteration prompt composition, fresh execution threads, deterministic gates, and isolated review decisions.
+description: Orchestrate manifest-defined Codex task series with per-packet prompt composition, fresh execution threads, deterministic gates, isolated review decisions, and durable series state.
 ---
 
-Use this skill when a Codex task should be handled through a repeatable, bounded lifecycle loop.
+Use this skill when a Codex task or task series should be handled through the
+repeatable, bounded lifecycle loop. Every run uses a manifest, including
+one-packet runs.
 
-This skill is self-contained. It owns the loop entrypoint, the task packet contract, and the execution prompt template:
+This skill is self-contained. It owns the loop entrypoint, the manifest
+contract, the task packet contract, generated series state, and the execution
+prompt template:
 
-- `scripts/task_loop.py`: loop entrypoint.
+- `scripts/task_loop.py`: manifest-only loop entrypoint.
 - `scripts/codex_session.py`: execution-only Codex SDK adapter; one fresh thread per iteration.
-- `scripts/validate_task_packet.py`: standalone task packet validator.
+- `scripts/validate_task_packet.py`: diagnostic task packet validator.
+- `schemas/task_series_manifest.schema.json`: manifest contract.
+- `schemas/task_series_state.schema.json`: generated state contract.
 - `schemas/task_packet.schema.json`: task packet contract.
 - `templates/execution_prompt.md`: fixed execution contract rendered into every composed prompt.
-- `templates/ordered_packet_series_prompt.md`: operator prompt for supervising an ordered series of task packets through repeated single-packet runs.
 
 Run:
 
 ```bash
-.venv/bin/python skills/task-loop/scripts/validate_task_packet.py --task <task_packet>.json [--workspace-root <dir>]
-.venv/bin/python skills/task-loop/scripts/task_loop.py --task <task_packet>.json [--workspace-root <dir>] [--model <model>] [--review-model <model>]
+.venv/bin/python skills/task-loop/scripts/task_loop.py --manifest <manifest>.json [--model <model>] [--review-model <model>]
 ```
-For an ordered packet series, use `templates/ordered_packet_series_prompt.md`
-as an operator prompt.
 
 Inspect CLI options without starting a task:
 
 ```bash
-.venv/bin/python skills/task-loop/scripts/validate_task_packet.py --help
 .venv/bin/python skills/task-loop/scripts/task_loop.py --help
 ```
 
-A well-specified task is small enough to fit in one explicit packet,
+A well-specified manifest contains one or more small explicit packets,
 constrained to known paths, with concrete deliverables, objective acceptance
-criteria, and validation evidence that can justify an accept decision without
+criteria, and validation evidence that can justify accept decisions without
 relying on trust, memory, or broad interpretation.
 
-Loop per iteration:
+Manifest rules:
+
+1. Each manifest packet has `packet_id`, `task`, and `depends_on`.
+2. `depends_on: null` means independent.
+3. `depends_on: [...]` means the packet can run only after every referenced
+   packet is `completed` with `outcome=accepted`.
+4. Full schema, dependency, task-packet, workspace, and Git validation happens
+   before execution starts and before any packet receives an outcome.
+
+Loop per packet:
 
 1. Compose the prompt: fixed task contract + iteration counter + unresolved criteria + failure evidence + reviewer direction. The contract never mutates; dynamic state is rebuilt from the latest `evidence.json` and `decision.json`.
-2. Run one execution turn on a fresh thread (no carried-over context).
+2. Run one execution turn on a fresh thread.
 3. Invoke the `eval-gate` skill as a subprocess to produce `evidence.json`.
 4. Invoke the `evidence-review` skill as a subprocess to produce `decision.json`.
-5. Dispatch: `accept` with the outer gate and diff audit passed creates one accepted task commit and fast-forwards `main`; `escalate`, `reject`, or `split` stops; otherwise recompose without creating Git commits.
+5. Map accepted or terminal review results into series state/outcome fields and update durable state.
 
 Git lifecycle:
 
-1. The runner starts only from a clean local `main` that matches `origin/main`.
-2. The runner creates `codex/<task_id>` from verified `main` and runs all task work on that branch.
+1. The runner starts only from clean local `main` matching `origin/main`.
+2. The runner creates or switches to the manifest `series_branch` from verified `main`.
 3. Execution turns must not stage, commit, branch, checkout, merge, rebase, push, reset, or otherwise manage Git.
-4. The runner commits only accepted changes that passed the diff audit.
-5. The runner never commits `continue`, `repair`, `narrow`, `reject`, `split`, `escalate`, or max-iteration states.
-6. After an accepted commit, the runner switches to `main`, verifies that `main` still matches `origin/main`, fast-forwards `main` to the task branch, reruns final validation, and verifies clean `main`.
-7. The runner never pushes, rebases, creates merge commits, resolves conflicts, or deletes branches.
-8. Failed or stopped runs discard unaccepted task-branch changes before returning to clean `main`; run evidence remains under ignored `.codex_task_loop/`.
+4. The runner commits only accepted packet changes that passed the diff audit.
+5. The runner commits generated series state to `codex_task_loop_series/<series_id>/state.json`.
+6. The runner pushes only the series branch.
+7. The runner never advances `main`.
+8. Failed or stopped packet work is discarded before evaluating the next runnable packet; run evidence remains under ignored `.codex_task_loop/`.
 
 Run artifacts:
 
-- Run root: `.codex_task_loop/runs/<run_id>/`.
-- `task.json`: copied task packet used for the run.
+- Series state: `codex_task_loop_series/<series_id>/state.json`.
+- Packet run root: `.codex_task_loop/runs/<run_id>/`.
+- `task.json`: copied task packet used for the packet run.
 - `run_events.jsonl`: append-only event stream for lifecycle, artifact, review,
   Git, and finish events.
 - `RUN_SUMMARY.md`: operator summary with final status, Git lifecycle, changed
   files, and per-iteration artifact links.
-- `final.json`: machine-readable final status. Pointer fields:
-  `run_dir`, `run_events_file`, `run_summary_file`.
+- `final.json`: machine-readable packet final status.
 - `iteration_XX/`: `composed_prompt.md`, `codex_execution.md`,
   `evidence.json`, `workspace.diff`, `decision.json`.
-- `final_validation/evidence.json`: present only after an accepted commit is
-  fast-forwarded to `main`.
 
 Rules:
 
-1. Read the task packet; identify objective, allowed paths, blocked paths, deliverables, and acceptance criteria.
-2. Make only the smallest scoped change per iteration.
+1. Read the manifest and all referenced task packets before execution.
+2. Make only the smallest scoped change per packet iteration.
 3. The external loop owns validation and acceptance; never self-declare completion.
-4. Exit codes: 0 accepted, 1 max iterations reached, 2 stopped by reviewer decision.
+4. Exit codes: 0 all packets accepted, 1 at least one packet reached max iterations, 2 any other non-accepted series outcome.

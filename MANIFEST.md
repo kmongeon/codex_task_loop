@@ -33,6 +33,24 @@ tests/
   test_git_lifecycle.py          # temp-repo tests for Git policy helpers
 ```
 
+Runtime output:
+
+```text
+.codex_task_loop/runs/<run_id>/
+  task.json                       # task packet copy used for this run
+  run_events.jsonl                # append-only lifecycle events
+  RUN_SUMMARY.md                  # operator summary and artifact index
+  final.json                      # final status; points to run_dir, run_events_file, run_summary_file
+  iteration_XX/
+    composed_prompt.md
+    codex_execution.md
+    evidence.json
+    workspace.diff
+    decision.json
+  final_validation/
+    evidence.json                 # only after accepted changes are fast-forwarded to main
+```
+
 Supporting files:
 
 - `requirements.txt`

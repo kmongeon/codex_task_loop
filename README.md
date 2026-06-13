@@ -19,9 +19,9 @@ bounded Codex tasks.
 ## Install
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+.venv/bin/pip install -r requirements.txt
 ```
 
 ## Basic Workflow
@@ -31,27 +31,45 @@ pip install -r requirements.txt
 2. Validate each packet before execution:
 
    ```bash
-   python skills/task-loop/scripts/validate_task_packet.py --task examples/docs_task.json
+   .venv/bin/python skills/task-loop/scripts/validate_task_packet.py --task examples/docs_task.json
    ```
 
 3. Run one validated packet:
 
    ```bash
-   python skills/task-loop/scripts/task_loop.py --task examples/docs_task.json
+   .venv/bin/python skills/task-loop/scripts/task_loop.py --task examples/docs_task.json
    ```
 
 4. For nested projects inside a larger git repository, pass the workspace root:
 
    ```bash
-   python skills/task-loop/scripts/task_loop.py \
+   .venv/bin/python skills/task-loop/scripts/task_loop.py \
      --task examples/docs_task.json \
      --workspace-root /path/to/nested/project
    ```
 
 5. Inspect run artifacts under `.codex_task_loop/runs/`.
 
-Each run writes `run_events.jsonl`, `RUN_SUMMARY.md`, `final.json`, and per-
-iteration prompt, execution, evidence, diff, and decision artifacts.
+Run artifact pointers:
+
+- `.codex_task_loop/runs/<run_id>/task.json`: task packet copied into the run.
+- `.codex_task_loop/runs/<run_id>/run_events.jsonl`: append-only lifecycle
+  event stream.
+- `.codex_task_loop/runs/<run_id>/RUN_SUMMARY.md`: operator-readable status,
+  Git lifecycle, changed files, and per-iteration artifact links.
+- `.codex_task_loop/runs/<run_id>/final.json`: machine-readable final status.
+  Key pointer fields: `run_dir`, `run_events_file`, `run_summary_file`.
+- `.codex_task_loop/runs/<run_id>/iteration_XX/`: `composed_prompt.md`,
+  `codex_execution.md`, `evidence.json`, `workspace.diff`, `decision.json`.
+- `.codex_task_loop/runs/<run_id>/final_validation/evidence.json`: written
+  only after an accepted commit is fast-forwarded to `main`.
+
+See CLI surface:
+
+```bash
+.venv/bin/python skills/task-loop/scripts/validate_task_packet.py --help
+.venv/bin/python skills/task-loop/scripts/task_loop.py --help
+```
 
 ## Task Contract
 

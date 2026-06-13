@@ -17,11 +17,18 @@ This skill is self-contained. It owns the loop entrypoint, the task packet contr
 Run:
 
 ```bash
-python skills/task-loop/scripts/validate_task_packet.py --task <task_packet>.json [--workspace-root <dir>]
-python skills/task-loop/scripts/task_loop.py --task <task_packet>.json [--workspace-root <dir>] [--model <model>] [--review-model <model>]
+.venv/bin/python skills/task-loop/scripts/validate_task_packet.py --task <task_packet>.json [--workspace-root <dir>]
+.venv/bin/python skills/task-loop/scripts/task_loop.py --task <task_packet>.json [--workspace-root <dir>] [--model <model>] [--review-model <model>]
 ```
 For an ordered packet series, use `templates/ordered_packet_series_prompt.md`
 as an operator prompt.
+
+Inspect CLI options without starting a task:
+
+```bash
+.venv/bin/python skills/task-loop/scripts/validate_task_packet.py --help
+.venv/bin/python skills/task-loop/scripts/task_loop.py --help
+```
 
 A well-specified task is small enough to fit in one explicit packet,
 constrained to known paths, with concrete deliverables, objective acceptance
@@ -46,6 +53,21 @@ Git lifecycle:
 6. After an accepted commit, the runner switches to `main`, verifies that `main` still matches `origin/main`, fast-forwards `main` to the task branch, reruns final validation, and verifies clean `main`.
 7. The runner never pushes, rebases, creates merge commits, resolves conflicts, or deletes branches.
 8. Failed or stopped runs discard unaccepted task-branch changes before returning to clean `main`; run evidence remains under ignored `.codex_task_loop/`.
+
+Run artifacts:
+
+- Run root: `.codex_task_loop/runs/<run_id>/`.
+- `task.json`: copied task packet used for the run.
+- `run_events.jsonl`: append-only event stream for lifecycle, artifact, review,
+  Git, and finish events.
+- `RUN_SUMMARY.md`: operator summary with final status, Git lifecycle, changed
+  files, and per-iteration artifact links.
+- `final.json`: machine-readable final status. Pointer fields:
+  `run_dir`, `run_events_file`, `run_summary_file`.
+- `iteration_XX/`: `composed_prompt.md`, `codex_execution.md`,
+  `evidence.json`, `workspace.diff`, `decision.json`.
+- `final_validation/evidence.json`: present only after an accepted commit is
+  fast-forwarded to `main`.
 
 Rules:
 

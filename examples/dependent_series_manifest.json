@@ -1,0 +1,17 @@
+{
+  "series_id": "dependent-docs-series",
+  "series_branch": "codex/dependent-docs-series",
+  "workspace_root": "..",
+  "packets": [
+    {
+      "packet_id": "docs-plan",
+      "task": "examples/dependent_docs_plan_task.json",
+      "depends_on": null
+    },
+    {
+      "packet_id": "docs-usage",
+      "task": "examples/dependent_docs_usage_task.json",
+      "depends_on": ["docs-plan"]
+    }
+  ]
+}

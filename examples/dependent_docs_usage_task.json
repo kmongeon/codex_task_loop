@@ -1,0 +1,22 @@
+{
+  "task_id": "dependent-docs-usage",
+  "task_type": "docs",
+  "objective": "Create docs/USAGE.md after the documentation plan exists. Reference docs/PLAN.md when describing the usage workflow.",
+  "allowed_paths": ["docs/USAGE.md"],
+  "blocked_paths": ["src/", "tests/"],
+  "deliverables": ["docs/USAGE.md"],
+  "acceptance_criteria": [
+    "docs/USAGE.md exists",
+    "docs/USAGE.md references docs/PLAN.md",
+    "No source or test files are modified"
+  ],
+  "validation_commands": [],
+  "regression_commands": [],
+  "artifact_checks": [
+    {"path": "docs/USAGE.md", "kind": "nonempty"},
+    {"path": "docs/USAGE.md", "kind": "contains", "text": "docs/PLAN.md"}
+  ],
+  "human_review_required": false,
+  "max_iterations": 3,
+  "command_timeout_seconds": 120
+}

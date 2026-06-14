@@ -63,9 +63,14 @@ Supporting files:
 - `README.md`
 - `AGENTS.md`
 - `examples/docs_manifest.json`
+- `examples/pytest_manifest.json`
+- `examples/promptfoo_eval_manifest.json`
+- `examples/dependent_series_manifest.json`
 - `examples/docs_task.json`
 - `examples/pytest_task.json`
 - `examples/promptfoo_eval_task.json`
+- `examples/dependent_docs_plan_task.json`
+- `examples/dependent_docs_usage_task.json`
 
 There are no root-level `scripts/`, `schemas/`, or `templates/` directories;
 those surfaces live inside the skills that own them.

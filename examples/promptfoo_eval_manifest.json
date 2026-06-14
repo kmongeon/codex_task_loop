@@ -1,0 +1,12 @@
+{
+  "series_id": "promptfoo-eval-addition",
+  "series_branch": "codex/promptfoo-eval-addition",
+  "workspace_root": "..",
+  "packets": [
+    {
+      "packet_id": "promptfoo-eval-addition",
+      "task": "examples/promptfoo_eval_task.json",
+      "depends_on": null
+    }
+  ]
+}

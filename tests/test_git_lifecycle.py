@@ -435,6 +435,43 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(state["packets"][2]["outcome"], "dependency_not_completed")
 
 
+class ExampleContractTests(unittest.TestCase):
+    def test_all_example_task_packets_validate(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        schema = validate_task_packet.read_json(validate_task_packet.TASK_SCHEMA_PATH)
+        task_paths = sorted((root / "examples").glob("*_task.json"))
+
+        self.assertGreaterEqual(len(task_paths), 5)
+        for path in task_paths:
+            task = validate_task_packet.read_json(path)
+            errors = validate_task_packet.schema_errors(schema, task)
+            if isinstance(task, dict) and not errors:
+                errors.extend(validate_task_packet.validate_semantics(task))
+
+            self.assertEqual(errors, [], path.name)
+
+    def test_all_example_manifests_validate(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        manifest_paths = sorted((root / "examples").glob("*manifest.json"))
+
+        self.assertGreaterEqual(len(manifest_paths), 4)
+        for path in manifest_paths:
+            plan = task_loop.load_manifest_plan(root, path)
+
+            self.assertEqual(plan.manifest_path, path.resolve())
+            self.assertGreaterEqual(len(plan.packets), 1)
+
+    def test_dependent_series_example_expresses_dependency(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        plan = task_loop.load_manifest_plan(
+            root,
+            root / "examples" / "dependent_series_manifest.json",
+        )
+        by_id = {packet.packet_id: packet for packet in plan.packets}
+
+        self.assertEqual(by_id["docs-usage"].depends_on, ["docs-plan"])
+
+
 class CliAndDocsTests(unittest.TestCase):
     def test_task_loop_cli_requires_manifest_not_task(self) -> None:
         args = task_loop.parse_args(["--manifest", "manifest.json"])
@@ -455,6 +492,37 @@ class CliAndDocsTests(unittest.TestCase):
         ]
         for path in checked:
             self.assertNotIn(removed_prompt.removesuffix(".md"), path.read_text(encoding="utf-8"))
+
+    def test_readme_explains_git_operations_and_state_example(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        readme = (root / "README.md").read_text(encoding="utf-8")
+        expected_text = [
+            "What Git Operations Will This Perform?",
+            "Series State Example",
+            "Pushes only the series branch",
+            "Never advances `main`",
+            "codex_task_loop_series/<series_id>/state.json",
+            "examples/dependent_series_manifest.json",
+        ]
+
+        for text in expected_text:
+            self.assertIn(text, readme)
+
+        state_block = (
+            readme.split("## Series State Example", 1)[1]
+            .split("```json", 1)[1]
+            .split("```", 1)[0]
+            .strip()
+        )
+        state = json.loads(state_block)
+        state_schema = validate_task_packet.read_json(
+            root / "skills" / "task-loop" / "schemas" / "task_series_state.schema.json"
+        )
+
+        self.assertEqual(
+            task_loop.schema_error_messages(state_schema, state, "README series state example"),
+            [],
+        )
 
     def test_schema_rejects_stale_git_checkpoint_field(self) -> None:
         task = {

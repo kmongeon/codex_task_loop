@@ -1,0 +1,12 @@
+{
+  "series_id": "pytest-add-focused-tests",
+  "series_branch": "codex/pytest-add-focused-tests",
+  "workspace_root": "..",
+  "packets": [
+    {
+      "packet_id": "pytest-add-focused-tests",
+      "task": "examples/pytest_task.json",
+      "depends_on": null
+    }
+  ]
+}

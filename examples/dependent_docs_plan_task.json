@@ -1,0 +1,22 @@
+{
+  "task_id": "dependent-docs-plan",
+  "task_type": "docs",
+  "objective": "Create docs/PLAN.md with a concise implementation plan for the example documentation workflow.",
+  "allowed_paths": ["docs/PLAN.md"],
+  "blocked_paths": ["src/", "tests/"],
+  "deliverables": ["docs/PLAN.md"],
+  "acceptance_criteria": [
+    "docs/PLAN.md exists",
+    "docs/PLAN.md describes the documentation workflow plan",
+    "No source or test files are modified"
+  ],
+  "validation_commands": [],
+  "regression_commands": [],
+  "artifact_checks": [
+    {"path": "docs/PLAN.md", "kind": "nonempty"},
+    {"path": "docs/PLAN.md", "kind": "contains", "text": "Plan"}
+  ],
+  "human_review_required": false,
+  "max_iterations": 3,
+  "command_timeout_seconds": 120
+}

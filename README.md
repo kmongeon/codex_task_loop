@@ -64,23 +64,38 @@ See CLI surface:
 
 ## What Git Operations Will This Perform?
 
-The manifest runner owns the Git lifecycle for the series:
+Running a manifest authorizes only the documented runner-owned Git lifecycle
+for that manifest. It does not authorize arbitrary Git commands, and being on a
+non-main branch is not broad Git authorization.
+
+The manifest runner owns this lifecycle for the series:
 
 - Fetches `origin` during preflight.
 - Requires the current branch to be `main`.
 - Requires a clean worktree before the loop begins.
 - Requires local `main` to match `origin/main` before the loop begins.
 - Creates or switches to the manifest `series_branch` from verified `main`.
+- Uses the manifest `series_branch` as the only working and pushed branch for
+  the series. Prefer `codex/<slug>` branch names unless the manifest explicitly
+  assigns a different branch convention.
 - Commits accepted, diff-audited packet changes to `series_branch`.
 - Writes and commits `codex_task_loop_series/<series_id>/state.json`.
+- Stages only diff-audited accepted packet paths and the generated series state
+  file.
 - Pushes only the series branch.
-- Never advances `main`, pushes `main`, rebases `main`, or merges the series
-  branch back to `main`.
+- Treats `main` only as the verified starting base. The runner never advances,
+  pushes, rebases, merges into, resets, or rewrites `main`.
 - Cleans incomplete packet work before evaluating the next runnable packet.
   Ignored run artifacts under `.codex_task_loop/runs/` remain local artifacts
   referenced by durable series state.
+- Records branch and commit evidence in generated series state. Packet
+  artifacts linked from that state record validation and worktree dirty-state
+  evidence.
 
 The runner requires push access to `origin` for the manifest `series_branch`.
+Cleanup of failed or unaccepted work is safe only because the runner starts from
+a clean worktree and cleanup is limited to runner-produced task changes from the
+current manifest run.
 
 ## Contracts
 
@@ -190,7 +205,8 @@ Real timestamps, run IDs, and commit hashes differ.
 - Accepted packet changes and generated series progress state are committed to
   the series branch.
 - Incomplete packet work is cleaned before the scheduler evaluates the next
-  runnable packet.
+  runnable packet. Cleanup is not a general permission to discard pre-existing
+  user work; preflight rejects dirty worktrees before any packet runs.
 - `task-loop` invokes `eval-gate` and `evidence-review` through JSON file
   handoff: `task.json` -> `evidence.json` -> `decision.json`.
 - Evidence failures remain in packet artifacts. Public series state records

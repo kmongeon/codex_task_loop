@@ -325,12 +325,17 @@ class GitLifecycleTests(unittest.TestCase):
             preflight = task_loop.git_preflight(repo)
             task_loop.prepare_series_branch(repo, "codex/series", preflight["start_main_commit"])
             before = task_loop.git_head(repo)
+            run_artifact = repo / ".codex_task_loop" / "runs" / "keep" / "artifact.txt"
+            run_artifact.parent.mkdir(parents=True)
+            run_artifact.write_text("evidence\n", encoding="utf-8")
             (repo / "file.txt").write_text("rejected\n", encoding="utf-8")
 
-            task_loop.discard_unaccepted_task_changes(repo)
+            status = task_loop.discard_unaccepted_task_changes(repo, repo)
 
             self.assertEqual(task_loop.git_head(repo), before)
+            self.assertTrue(status["clean"])
             self.assertEqual(task_loop.clean_status(repo), "")
+            self.assertTrue(run_artifact.exists())
 
     def test_manifest_run_accepts_single_packet_on_series_branch_without_advancing_main(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -363,6 +368,11 @@ class GitLifecycleTests(unittest.TestCase):
             self.assertTrue(packet["state_commit"])
             self.assertTrue(packet["run_dir"])
             self.assertTrue(packet["artifacts"]["final"])
+            final = json.loads((repo / packet["artifacts"]["final"]).read_text(encoding="utf-8"))
+            self.assertEqual(final["series_branch"], "codex/series")
+            self.assertEqual(final["worktree_status"]["label"], "after accepted packet commit")
+            self.assertTrue(final["worktree_status"]["clean"])
+            self.assertEqual(final["worktree_status"]["status"], [])
 
     def test_rejected_packet_cleans_work_and_skips_dependent_packet(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -401,6 +411,12 @@ class GitLifecycleTests(unittest.TestCase):
             self.assertEqual(packets["first"]["outcome"], "rejected")
             self.assertEqual(packets["second"]["state"], "skipped")
             self.assertEqual(packets["second"]["outcome"], "dependency_not_completed")
+            final = json.loads(
+                (repo / packets["first"]["artifacts"]["final"]).read_text(encoding="utf-8")
+            )
+            self.assertFalse(final["cleanup_worktree_status"]["before"]["clean"])
+            self.assertTrue(final["cleanup_worktree_status"]["after"]["clean"])
+            self.assertTrue(final["worktree_status"]["clean"])
 
 
 class SchedulerTests(unittest.TestCase):
@@ -496,17 +512,22 @@ class CliAndDocsTests(unittest.TestCase):
     def test_readme_explains_git_operations_and_state_example(self) -> None:
         root = Path(__file__).resolve().parents[1]
         readme = (root / "README.md").read_text(encoding="utf-8")
+        readme_text = " ".join(readme.split())
         expected_text = [
             "What Git Operations Will This Perform?",
             "Series State Example",
             "Pushes only the series branch",
-            "Never advances `main`",
+            "never advances",
+            "Running a manifest authorizes only the documented runner-owned Git lifecycle",
+            "being on a non-main branch is not broad Git authorization",
+            "Cleanup of failed or unaccepted work is safe only because",
+            "Prefer `codex/<slug>`",
             "codex_task_loop_series/<series_id>/state.json",
             "examples/dependent_series_manifest.json",
         ]
 
         for text in expected_text:
-            self.assertIn(text, readme)
+            self.assertIn(text, readme_text)
 
         state_block = (
             readme.split("## Series State Example", 1)[1]
@@ -522,6 +543,31 @@ class CliAndDocsTests(unittest.TestCase):
         self.assertEqual(
             task_loop.schema_error_messages(state_schema, state, "README series state example"),
             [],
+        )
+
+    def test_policy_surfaces_document_runner_owned_git_boundaries(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        skill = (root / "skills" / "task-loop" / "SKILL.md").read_text(encoding="utf-8")
+        skill_text = " ".join(skill.split())
+        prompt = (
+            root / "skills" / "task-loop" / "templates" / "execution_prompt.md"
+        ).read_text(encoding="utf-8")
+        manifest_schema = validate_task_packet.read_json(
+            root / "skills" / "task-loop" / "schemas" / "task_series_manifest.schema.json"
+        )
+
+        self.assertIn(
+            "Running a manifest authorizes only this documented runner-owned Git lifecycle",
+            skill_text,
+        )
+        self.assertIn("Execution turns must not stage, commit, branch", skill_text)
+        self.assertIn("It never advances, pushes, rebases, merges into, resets, or rewrites `main`", skill_text)
+        self.assertIn("cleanup is limited to runner-produced task changes", skill_text)
+        self.assertIn("Do not stage, commit, branch, checkout, merge, rebase, push, reset, clean", prompt)
+        self.assertIn("report it in your summary instead of acting", prompt)
+        self.assertIn(
+            "Prefer codex/<slug>",
+            manifest_schema["properties"]["series_branch"]["description"],
         )
 
     def test_schema_rejects_stale_git_checkpoint_field(self) -> None:

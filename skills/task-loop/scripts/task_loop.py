@@ -5,6 +5,9 @@ Manifest-only Codex task lifecycle orchestrator.
 Every run is driven by a task-series manifest, including one-packet runs. The
 runner validates the full manifest and every referenced task packet before it
 creates a series branch, writes progress state, or assigns any packet outcome.
+Running a manifest authorizes only the documented runner-owned Git lifecycle for
+that manifest: verified main as base, manifest series_branch for work and push,
+and no execution-turn Git management.
 """
 
 from __future__ import annotations
@@ -608,6 +611,15 @@ def require_clean_worktree(repo: Path, label: str) -> None:
         raise GitPolicyError(f"{label} requires a clean worktree:\n{status}")
 
 
+def worktree_status_evidence(repo: Path, label: str) -> dict[str, Any]:
+    status = clean_status(repo)
+    return {
+        "label": label,
+        "clean": status == "",
+        "status": status.splitlines(),
+    }
+
+
 def ensure_origin(repo: Path) -> None:
     git_stdout(repo, ["remote", "get-url", ORIGIN_REMOTE])
 
@@ -699,9 +711,17 @@ def commit_accepted_changes(
     return git_head(repo)
 
 
-def discard_unaccepted_task_changes(repo: Path) -> None:
+def discard_unaccepted_task_changes(repo: Path, workspace: Path) -> dict[str, Any]:
     git_command(repo, ["restore", "--staged", "--worktree", "."])
-    git_command(repo, ["clean", "-fd"])
+    artifact_exclude = (workspace / ".codex_task_loop").relative_to(repo).as_posix() + "/"
+    git_command(repo, ["clean", "-fd", "-e", artifact_exclude])
+    status = worktree_status_evidence(repo, "after unaccepted packet cleanup")
+    if not status["clean"]:
+        raise GitPolicyError(
+            "unaccepted packet cleanup did not restore a clean worktree:\n"
+            + "\n".join(status["status"])
+        )
+    return status
 
 
 def commit_tracked_state_file(repo: Path, workspace: Path, state_path: Path, message: str) -> str:
@@ -771,6 +791,24 @@ def write_run_summary(
         f"- State commit: `{final.get('state_commit') or 'none'}`",
         f"- Main advanced: `{final['main_advanced']}`",
     ]
+    worktree_status = final.get("worktree_status")
+    if worktree_status is not None:
+        lines += [
+            f"- Worktree status check: `{worktree_status['label']}`",
+            f"- Worktree clean: `{worktree_status['clean']}`",
+            "- Worktree porcelain:",
+            "  ```text",
+            "\n".join(worktree_status["status"]) or "clean",
+            "  ```",
+        ]
+    cleanup_status = final.get("cleanup_worktree_status")
+    if cleanup_status is not None:
+        before_cleanup = cleanup_status["before"]
+        after_cleanup = cleanup_status["after"]
+        lines += [
+            f"- Cleanup before clean: `{before_cleanup['clean']}`",
+            f"- Cleanup after clean: `{after_cleanup['clean']}`",
+        ]
 
     lines += [
         "",
@@ -829,6 +867,8 @@ def write_final_result(
     git_metadata: dict[str, Any],
     decision: dict[str, Any] | None = None,
     reason: str | None = None,
+    worktree_status: dict[str, Any] | None = None,
+    cleanup_worktree_status: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     final: dict[str, Any] = {
         "complete": state == COMPLETED and outcome == ACCEPTED,
@@ -844,6 +884,10 @@ def write_final_result(
         final["decision"] = decision
     if reason is not None:
         final["reason"] = reason
+    if worktree_status is not None:
+        final["worktree_status"] = worktree_status
+    if cleanup_worktree_status is not None:
+        final["cleanup_worktree_status"] = cleanup_worktree_status
     if changed:
         final["changed_files"] = changed
     write_json(run_dir / "final.json", final)
@@ -1173,6 +1217,7 @@ def execute_packet(
         )
         if accepted:
             accepted_commit = commit_accepted_changes(repo, workspace, changed, packet.packet_id, iteration)
+            worktree_status = worktree_status_evidence(repo, "after accepted packet commit")
             git_metadata["accepted_commit"] = accepted_commit
             append_run_event(
                 run_dir,
@@ -1194,6 +1239,7 @@ def execute_packet(
                 iteration_records,
                 git_metadata,
                 decision=decision,
+                worktree_status=worktree_status,
             )
             append_run_event(
                 run_dir,
@@ -1218,6 +1264,17 @@ def execute_packet(
 
         if decision["decision"] in STOP_DECISION_OUTCOMES:
             outcome = STOP_DECISION_OUTCOMES[decision["decision"]]
+            before_cleanup_status = worktree_status_evidence(repo, "before unaccepted packet cleanup")
+            after_cleanup_status = discard_unaccepted_task_changes(repo, workspace)
+            append_run_event(
+                run_dir,
+                {
+                    "event": "unaccepted_work_discarded",
+                    "iteration": iteration,
+                    "before_cleanup": before_cleanup_status,
+                    "after_cleanup": after_cleanup_status,
+                },
+            )
             final = write_final_result(
                 run_dir,
                 workspace,
@@ -1229,6 +1286,11 @@ def execute_packet(
                 iteration_records,
                 git_metadata,
                 decision=decision,
+                worktree_status=after_cleanup_status,
+                cleanup_worktree_status={
+                    "before": before_cleanup_status,
+                    "after": after_cleanup_status,
+                },
             )
             append_run_event(
                 run_dir,
@@ -1241,7 +1303,6 @@ def execute_packet(
                     "run_summary_file": final["run_summary_file"],
                 },
             )
-            discard_unaccepted_task_changes(repo)
             return PacketRunResult(
                 state=COMPLETED,
                 outcome=outcome,
@@ -1252,6 +1313,17 @@ def execute_packet(
                 changed_files=changed,
             )
 
+    before_cleanup_status = worktree_status_evidence(repo, "before unaccepted packet cleanup")
+    after_cleanup_status = discard_unaccepted_task_changes(repo, workspace)
+    append_run_event(
+        run_dir,
+        {
+            "event": "unaccepted_work_discarded",
+            "iteration": max_iterations,
+            "before_cleanup": before_cleanup_status,
+            "after_cleanup": after_cleanup_status,
+        },
+    )
     final = write_final_result(
         run_dir,
         workspace,
@@ -1263,6 +1335,11 @@ def execute_packet(
         iteration_records,
         git_metadata,
         reason="Reached max_iterations",
+        worktree_status=after_cleanup_status,
+        cleanup_worktree_status={
+            "before": before_cleanup_status,
+            "after": after_cleanup_status,
+        },
     )
     append_run_event(
         run_dir,
@@ -1275,7 +1352,6 @@ def execute_packet(
             "run_summary_file": final["run_summary_file"],
         },
     )
-    discard_unaccepted_task_changes(repo)
     return PacketRunResult(
         state=COMPLETED,
         outcome=MAX_ITERATIONS,

@@ -1,6 +1,6 @@
 {
   "name": "codex-task-loop",
-  "version": "0.1.0+codex.20260613123000",
+  "version": "0.1.0+codex.20260614104617",
   "description": "A Codex SDK task lifecycle loop with task specification, execution, deterministic evaluation, and isolated evidence review skills.",
   "author": {
     "name": "Kevin Mongeon"

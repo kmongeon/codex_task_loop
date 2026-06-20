@@ -1337,6 +1337,7 @@ def execute_packet(
         latest_changed,
         iteration_records,
         git_metadata,
+        decision=decision,
         reason="Reached max_iterations",
         worktree_status=after_cleanup_status,
         cleanup_worktree_status={

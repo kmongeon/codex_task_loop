@@ -147,6 +147,19 @@ def approval_required_decision() -> dict[str, object]:
     }
 
 
+def repair_decision() -> dict[str, object]:
+    return {
+        "decision": "repair",
+        "reason": "remaining delta still needs a bounded repair",
+        "next_prompt": "Repair the remaining delta.",
+        "completed_criteria": [],
+        "unresolved_criteria": ["file.txt changed"],
+        "validation_required": [],
+        "risks": ["max_iterations_terminal_handoff"],
+        "new_task_packets": [],
+    }
+
+
 class ManifestValidationTests(unittest.TestCase):
     def test_valid_single_packet_manifest_passes(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -474,6 +487,37 @@ class GitLifecycleTests(unittest.TestCase):
             self.assertEqual(final["decision"]["decision"], "approval_required")
             self.assertFalse(final["cleanup_worktree_status"]["before"]["clean"])
             self.assertTrue(final["cleanup_worktree_status"]["after"]["clean"])
+            self.assertTrue(final["worktree_status"]["clean"])
+
+    def test_max_iterations_final_records_latest_review_decision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, _origin = init_repo(Path(tmpdir))
+            manifest_path = write_valid_project(repo)
+            commit_and_push_main(repo)
+
+            def fake_execution(*_args: object) -> str:
+                (repo / "file.txt").write_text("needs another pass\n", encoding="utf-8")
+                return "changed file.txt but did not satisfy reviewer"
+
+            with chdir(repo), patch("task_loop.run_execution_turn", fake_execution), patch(
+                "task_loop.run_evidence_review",
+                return_value=repair_decision(),
+            ):
+                code = task_loop.run_manifest_loop(
+                    task_loop.parse_args(["--manifest", str(manifest_path), "--model", "test"])
+                )
+
+            state = json.loads((repo / "codex_task_loop_series" / "series" / "state.json").read_text())
+            packet = state["packets"][0]
+            final = json.loads((repo / packet["artifacts"]["final"]).read_text(encoding="utf-8"))
+
+            self.assertEqual(code, 1)
+            self.assertEqual(packet["outcome"], "max_iterations")
+            self.assertEqual(final["outcome"], "max_iterations")
+            self.assertEqual(final["decision"]["decision"], "repair")
+            self.assertEqual(final["decision"]["unresolved_criteria"], ["file.txt changed"])
+            self.assertEqual(final["decision"]["next_prompt"], "Repair the remaining delta.")
+            self.assertEqual(final["reason"], "Reached max_iterations")
             self.assertTrue(final["worktree_status"]["clean"])
 
 

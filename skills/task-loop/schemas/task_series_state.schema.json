@@ -55,6 +55,9 @@
               "rejected",
               "split_required",
               "escalated",
+              "blocked",
+              "approval_required",
+              "no_progress",
               "max_iterations",
               "dependency_not_completed",
               null

@@ -5,7 +5,21 @@
   "additionalProperties": false,
   "required": ["decision", "reason", "next_prompt", "completed_criteria", "unresolved_criteria", "validation_required", "risks", "new_task_packets"],
   "properties": {
-    "decision": {"type": "string", "enum": ["accept", "continue", "repair", "narrow", "escalate", "reject", "split"]},
+    "decision": {
+      "type": "string",
+      "enum": [
+        "accept",
+        "continue",
+        "repair",
+        "narrow",
+        "escalate",
+        "reject",
+        "split",
+        "blocked",
+        "approval_required",
+        "no_progress"
+      ]
+    },
     "reason": {"type": "string"},
     "next_prompt": {"type": "string"},
     "completed_criteria": {"type": "array", "items": {"type": "string"}},

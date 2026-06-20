@@ -134,6 +134,19 @@ def reject_decision() -> dict[str, object]:
     }
 
 
+def approval_required_decision() -> dict[str, object]:
+    return {
+        "decision": "approval_required",
+        "reason": "next repair requires dependency installation",
+        "next_prompt": "",
+        "completed_criteria": [],
+        "unresolved_criteria": ["file.txt changed"],
+        "validation_required": [],
+        "risks": ["dependency_installation_required"],
+        "new_task_packets": [],
+    }
+
+
 class ManifestValidationTests(unittest.TestCase):
     def test_valid_single_packet_manifest_passes(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -418,6 +431,51 @@ class GitLifecycleTests(unittest.TestCase):
             self.assertTrue(final["cleanup_worktree_status"]["after"]["clean"])
             self.assertTrue(final["worktree_status"]["clean"])
 
+    def test_approval_required_packet_cleans_work_and_skips_dependent_packet(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, _origin = init_repo(Path(tmpdir))
+            write_json(repo / "tasks" / "first.json", valid_task())
+            write_json(repo / "tasks" / "second.json", {**valid_task(), "task_id": "second"})
+            manifest_path = repo / "manifest.json"
+            write_json(
+                manifest_path,
+                valid_manifest(
+                    [
+                        {"packet_id": "first", "task": "tasks/first.json", "depends_on": None},
+                        {"packet_id": "second", "task": "tasks/second.json", "depends_on": ["first"]},
+                    ]
+                ),
+            )
+            commit_and_push_main(repo)
+
+            def fake_execution(*_args: object) -> str:
+                (repo / "file.txt").write_text("approval required\n", encoding="utf-8")
+                return "changed file.txt"
+
+            with chdir(repo), patch("task_loop.run_execution_turn", fake_execution), patch(
+                "task_loop.run_evidence_review",
+                return_value=approval_required_decision(),
+            ):
+                code = task_loop.run_manifest_loop(
+                    task_loop.parse_args(["--manifest", str(manifest_path), "--model", "test"])
+                )
+
+            state = json.loads((repo / "codex_task_loop_series" / "series" / "state.json").read_text())
+            packets = {packet["packet_id"]: packet for packet in state["packets"]}
+            self.assertEqual(code, 2)
+            self.assertEqual((repo / "file.txt").read_text(encoding="utf-8"), "initial\n")
+            self.assertEqual(packets["first"]["state"], "completed")
+            self.assertEqual(packets["first"]["outcome"], "approval_required")
+            self.assertEqual(packets["second"]["state"], "skipped")
+            self.assertEqual(packets["second"]["outcome"], "dependency_not_completed")
+            final = json.loads(
+                (repo / packets["first"]["artifacts"]["final"]).read_text(encoding="utf-8")
+            )
+            self.assertEqual(final["decision"]["decision"], "approval_required")
+            self.assertFalse(final["cleanup_worktree_status"]["before"]["clean"])
+            self.assertTrue(final["cleanup_worktree_status"]["after"]["clean"])
+            self.assertTrue(final["worktree_status"]["clean"])
+
 
 class SchedulerTests(unittest.TestCase):
     def test_runnable_packet_requires_completed_accepted_dependencies(self) -> None:
@@ -585,6 +643,21 @@ class CliAndDocsTests(unittest.TestCase):
         errors = validate_task_packet.schema_errors(schema, task)
 
         self.assertTrue(any("git_checkpoint" in error for error in errors))
+
+    def test_decision_schema_accepts_explicit_stop_decisions(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        schema = validate_task_packet.read_json(
+            root / "skills" / "evidence-review" / "schemas" / "decision.schema.json"
+        )
+        decisions = ["blocked", "approval_required", "no_progress"]
+
+        for decision in decisions:
+            errors = task_loop.schema_error_messages(
+                schema,
+                {**reject_decision(), "decision": decision},
+                f"{decision} decision",
+            )
+            self.assertEqual(errors, [], decision)
 
 
 if __name__ == "__main__":

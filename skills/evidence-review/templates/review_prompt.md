@@ -17,3 +17,6 @@ Decision rules:
 - decision=split when the task is too large and should become smaller task packets.
 - decision=escalate when required information is missing.
 - decision=reject when the result is unsupported or inconsistent with the task packet.
+- decision=blocked when required non-approval input, fixture, path, runtime, or evidence is missing.
+- decision=approval_required when the next repair would require Git operations, destructive action, dependency installation, network access, or changes outside the loop architecture.
+- decision=no_progress when the latest evidence does not reduce the remaining delta or does not identify one bounded next repair.

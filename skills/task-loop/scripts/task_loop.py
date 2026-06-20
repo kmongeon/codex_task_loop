@@ -51,6 +51,9 @@ STOP_DECISION_OUTCOMES = {
     "escalate": "escalated",
     "reject": "rejected",
     "split": "split_required",
+    "blocked": "blocked",
+    "approval_required": "approval_required",
+    "no_progress": "no_progress",
 }
 TERMINAL_STATES = {COMPLETED, SKIPPED, STOPPED}
 DEFAULT_REPAIR_PROMPT = (

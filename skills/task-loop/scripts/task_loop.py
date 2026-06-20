@@ -519,8 +519,14 @@ def compose_prompt(
         raise RuntimeError("Repair prompt composition requires prior evidence.")
     direction = decision["next_prompt"].strip() or DEFAULT_REPAIR_PROMPT
     prompt += (
+        f"\n\nCompleted acceptance criteria:\n"
+        f"{json.dumps(decision['completed_criteria'], indent=2, ensure_ascii=False)}"
         f"\n\nUnresolved acceptance criteria:\n"
         f"{json.dumps(decision['unresolved_criteria'], indent=2, ensure_ascii=False)}"
+        f"\n\nValidation required by reviewer:\n"
+        f"{json.dumps(decision['validation_required'], indent=2, ensure_ascii=False)}"
+        f"\n\nReviewer risks:\n"
+        f"{json.dumps(decision['risks'], indent=2, ensure_ascii=False)}"
         f"\n\nFailure evidence from iteration {evidence['iteration']}:\n"
         f"{json.dumps(evidence_failure_summary(evidence), indent=2, ensure_ascii=False)}"
         f"\n\nReviewer direction:\n{direction}"
@@ -838,7 +844,12 @@ def write_run_summary(
             f"- Validation passed: `{evidence.get('validation_passed')}`",
             f"- Artifact checks passed: `{evidence.get('artifact_checks_passed')}`",
             f"- Diff audit passed: `{evidence.get('diff_audit_passed')}`",
-            f"- Reviewer decision: `{decision_record.get('decision')}`",
+            f"- Reviewer decision: `{decision_record['decision']}`",
+            f"- Reviewer reason: {decision_record['reason']}",
+            f"- Reviewer completed criteria: `{decision_record['completed_criteria_count']}`",
+            f"- Reviewer unresolved criteria: `{decision_record['unresolved_criteria_count']}`",
+            f"- Reviewer validation required: `{decision_record['validation_required_count']}`",
+            f"- Reviewer risks: `{decision_record['risk_count']}`",
             "",
         ]
 
@@ -855,6 +866,17 @@ def packet_artifacts(workspace: Path, run_dir: Path, iteration_records: list[dic
         "latest_evidence": latest.get("evidence"),
         "latest_decision": latest.get("decision"),
         "latest_diff": latest.get("diff"),
+    }
+
+
+def decision_summary(decision: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "decision": decision["decision"],
+        "reason": decision["reason"],
+        "completed_criteria_count": len(decision["completed_criteria"]),
+        "unresolved_criteria_count": len(decision["unresolved_criteria"]),
+        "validation_required_count": len(decision["validation_required"]),
+        "risk_count": len(decision["risks"]),
     }
 
 
@@ -1197,16 +1219,14 @@ def execute_packet(
         )
 
         decision = run_evidence_review(task_path, workspace, iter_dir, review_model, args.review_effort)
-        iteration_record["decision"] = {
-            "decision": decision["decision"],
-            "reason": decision["reason"],
-        }
+        review_summary = decision_summary(decision)
+        iteration_record["decision"] = review_summary
         append_run_event(
             run_dir,
             {
                 "event": "review_completed",
                 "iteration": iteration,
-                "decision": decision["decision"],
+                **review_summary,
                 "decision_file": relative_artifact_path(workspace, decision_path),
             },
         )
@@ -1251,6 +1271,7 @@ def execute_packet(
                     "state": COMPLETED,
                     "outcome": ACCEPTED,
                     "iterations": iteration,
+                    **review_summary,
                     "final_file": relative_artifact_path(workspace, run_dir / "final.json"),
                     "run_summary_file": final["run_summary_file"],
                 },
@@ -1302,6 +1323,7 @@ def execute_packet(
                     "state": COMPLETED,
                     "outcome": outcome,
                     "iterations": iteration,
+                    **review_summary,
                     "final_file": relative_artifact_path(workspace, run_dir / "final.json"),
                     "run_summary_file": final["run_summary_file"],
                 },
@@ -1352,6 +1374,8 @@ def execute_packet(
             "state": COMPLETED,
             "outcome": MAX_ITERATIONS,
             "iterations": max_iterations,
+            **decision_summary(decision),
+            "stop_reason": "Reached max_iterations",
             "final_file": relative_artifact_path(workspace, run_dir / "final.json"),
             "run_summary_file": final["run_summary_file"],
         },

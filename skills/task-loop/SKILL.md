@@ -47,7 +47,7 @@ Manifest rules:
 
 Loop per packet:
 
-1. Compose the prompt: fixed task contract + iteration counter + unresolved criteria + failure evidence + reviewer direction. The contract never mutates; dynamic state is rebuilt from the latest `evidence.json` and `decision.json`.
+1. Compose the prompt: fixed task contract + iteration counter + completed criteria + unresolved criteria + reviewer-required validation + reviewer risks + failure evidence + reviewer direction. The contract never mutates; dynamic state is rebuilt from the latest `evidence.json` and `decision.json`.
 2. Run one execution turn on a fresh thread.
 3. Invoke the `eval-gate` skill as a subprocess to produce `evidence.json`.
 4. Invoke the `evidence-review` skill as a subprocess to produce `decision.json`.

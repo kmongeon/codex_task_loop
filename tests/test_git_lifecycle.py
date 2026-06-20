@@ -395,10 +395,20 @@ class GitLifecycleTests(unittest.TestCase):
             self.assertTrue(packet["run_dir"])
             self.assertTrue(packet["artifacts"]["final"])
             final = json.loads((repo / packet["artifacts"]["final"]).read_text(encoding="utf-8"))
+            run_events = [
+                json.loads(line)
+                for line in (repo / packet["artifacts"]["run_events"]).read_text(encoding="utf-8").splitlines()
+            ]
+            finish_events = [event for event in run_events if event["event"] == "run_finished"]
             self.assertEqual(final["series_branch"], "codex/series")
             self.assertEqual(final["worktree_status"]["label"], "after accepted packet commit")
             self.assertTrue(final["worktree_status"]["clean"])
             self.assertEqual(final["worktree_status"]["status"], [])
+            self.assertEqual(len(finish_events), 1)
+            self.assertEqual(finish_events[0]["outcome"], "accepted")
+            self.assertEqual(finish_events[0]["decision"], "accept")
+            self.assertEqual(finish_events[0]["completed_criteria_count"], 1)
+            self.assertEqual(finish_events[0]["unresolved_criteria_count"], 0)
 
     def test_rejected_packet_cleans_work_and_skips_dependent_packet(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -484,10 +494,19 @@ class GitLifecycleTests(unittest.TestCase):
             final = json.loads(
                 (repo / packets["first"]["artifacts"]["final"]).read_text(encoding="utf-8")
             )
+            run_events = [
+                json.loads(line)
+                for line in (repo / packets["first"]["artifacts"]["run_events"]).read_text(encoding="utf-8").splitlines()
+            ]
+            finish_events = [event for event in run_events if event["event"] == "run_finished"]
             self.assertEqual(final["decision"]["decision"], "approval_required")
             self.assertFalse(final["cleanup_worktree_status"]["before"]["clean"])
             self.assertTrue(final["cleanup_worktree_status"]["after"]["clean"])
             self.assertTrue(final["worktree_status"]["clean"])
+            self.assertEqual(len(finish_events), 1)
+            self.assertEqual(finish_events[0]["outcome"], "approval_required")
+            self.assertEqual(finish_events[0]["decision"], "approval_required")
+            self.assertEqual(finish_events[0]["risk_count"], 1)
 
     def test_max_iterations_final_records_latest_review_decision(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -510,6 +529,13 @@ class GitLifecycleTests(unittest.TestCase):
             state = json.loads((repo / "codex_task_loop_series" / "series" / "state.json").read_text())
             packet = state["packets"][0]
             final = json.loads((repo / packet["artifacts"]["final"]).read_text(encoding="utf-8"))
+            summary = (repo / packet["artifacts"]["run_summary"]).read_text(encoding="utf-8")
+            run_events = [
+                json.loads(line)
+                for line in (repo / packet["artifacts"]["run_events"]).read_text(encoding="utf-8").splitlines()
+            ]
+            review_events = [event for event in run_events if event["event"] == "review_completed"]
+            finish_events = [event for event in run_events if event["event"] == "run_finished"]
 
             self.assertEqual(code, 1)
             self.assertEqual(packet["outcome"], "max_iterations")
@@ -519,6 +545,23 @@ class GitLifecycleTests(unittest.TestCase):
             self.assertEqual(final["decision"]["next_prompt"], "Repair the remaining delta.")
             self.assertEqual(final["reason"], "Reached max_iterations")
             self.assertTrue(final["worktree_status"]["clean"])
+            self.assertIn("- Reviewer reason: remaining delta still needs a bounded repair", summary)
+            self.assertIn("- Reviewer completed criteria: `0`", summary)
+            self.assertIn("- Reviewer unresolved criteria: `1`", summary)
+            self.assertIn("- Reviewer validation required: `0`", summary)
+            self.assertIn("- Reviewer risks: `1`", summary)
+            self.assertEqual(len(review_events), 1)
+            self.assertEqual(review_events[0]["reason"], "remaining delta still needs a bounded repair")
+            self.assertEqual(review_events[0]["completed_criteria_count"], 0)
+            self.assertEqual(review_events[0]["unresolved_criteria_count"], 1)
+            self.assertEqual(review_events[0]["validation_required_count"], 0)
+            self.assertEqual(review_events[0]["risk_count"], 1)
+            self.assertEqual(len(finish_events), 1)
+            self.assertEqual(finish_events[0]["outcome"], "max_iterations")
+            self.assertEqual(finish_events[0]["decision"], "repair")
+            self.assertEqual(finish_events[0]["completed_criteria_count"], 0)
+            self.assertEqual(finish_events[0]["unresolved_criteria_count"], 1)
+            self.assertEqual(finish_events[0]["stop_reason"], "Reached max_iterations")
 
 
 class SchedulerTests(unittest.TestCase):
@@ -551,6 +594,41 @@ class SchedulerTests(unittest.TestCase):
         self.assertTrue(task_loop.series_is_terminal(state))
         self.assertEqual(state["packets"][1]["outcome"], "dependency_not_completed")
         self.assertEqual(state["packets"][2]["outcome"], "dependency_not_completed")
+
+
+class PromptCompositionTests(unittest.TestCase):
+    def test_repair_prompt_carries_reviewer_validation_and_risks(self) -> None:
+        decision = {
+            **repair_decision(),
+            "completed_criteria": ["summary includes review reason"],
+            "validation_required": ["rerun focused lifecycle tests"],
+            "risks": ["audit_handoff_regression"],
+        }
+        evidence = {
+            "iteration": 1,
+            "commands": [],
+            "artifact_checks": [],
+            "diff_audit": {
+                "unexpected_files": [],
+                "blocked_files_changed": [],
+            },
+        }
+
+        prompt = task_loop.compose_prompt(
+            "Task packet:\n{task_json}",
+            '{"task_id": "change-file"}',
+            2,
+            3,
+            decision,
+            evidence,
+        )
+
+        self.assertIn("Completed acceptance criteria:", prompt)
+        self.assertIn("summary includes review reason", prompt)
+        self.assertIn("Validation required by reviewer:", prompt)
+        self.assertIn("rerun focused lifecycle tests", prompt)
+        self.assertIn("Reviewer risks:", prompt)
+        self.assertIn("audit_handoff_regression", prompt)
 
 
 class ExampleContractTests(unittest.TestCase):
@@ -662,6 +740,8 @@ class CliAndDocsTests(unittest.TestCase):
             "Running a manifest authorizes only this documented runner-owned Git lifecycle",
             skill_text,
         )
+        self.assertIn("completed criteria + unresolved criteria", skill_text)
+        self.assertIn("reviewer-required validation + reviewer risks", skill_text)
         self.assertIn("Execution turns must not stage, commit, branch", skill_text)
         self.assertIn("It never advances, pushes, rebases, merges into, resets, or rewrites `main`", skill_text)
         self.assertIn("cleanup is limited to runner-produced task changes", skill_text)
